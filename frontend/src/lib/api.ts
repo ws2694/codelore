@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { HealthStatus, TimelineEntry, Decision, Expert, OnboardStep } from './types';
+import type { HealthStatus, TimelineEntry, Decision, Expert, OnboardStep, AuthStatus, GitHubRepo } from './types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -69,5 +69,41 @@ export const healthApi = {
   check: async () => {
     const { data } = await api.get('/health');
     return data as HealthStatus;
+  },
+};
+
+export const authApi = {
+  getGitHubUrl: async () => {
+    const { data } = await api.get('/auth/github/url');
+    return data as { url: string };
+  },
+
+  callback: async (code: string) => {
+    const { data } = await api.get('/auth/github/callback', { params: { code } });
+    return data as { authenticated: boolean; user: string; avatar_url: string; name: string };
+  },
+
+  status: async () => {
+    const { data } = await api.get('/auth/status');
+    return data as AuthStatus;
+  },
+
+  logout: async () => {
+    const { data } = await api.post('/auth/logout');
+    return data;
+  },
+
+  selectRepo: async (repo: string) => {
+    const { data } = await api.post('/auth/select-repo', null, { params: { repo } });
+    return data;
+  },
+};
+
+export const githubApi = {
+  listRepos: async (page = 1, perPage = 30) => {
+    const { data } = await api.get('/github/repos', {
+      params: { page, per_page: perPage },
+    });
+    return data as { repos: GitHubRepo[]; page: number; per_page: number };
   },
 };

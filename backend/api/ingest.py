@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from backend.config import get_settings
 from backend.services.github_ingester import GitHubIngester
+from backend.services.auth_store import get_auth_state, is_authenticated
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -20,18 +21,27 @@ async def trigger_ingestion(
         raise HTTPException(status_code=409, detail="Ingestion already in progress")
 
     settings = get_settings()
-    target_repo = repo or settings.github_repo
+    auth = get_auth_state()
+
+    target_repo = repo or auth.selected_repo or settings.github_repo
+    token = auth.github_token if is_authenticated() else settings.github_token
 
     if not target_repo:
         raise HTTPException(
             status_code=400,
-            detail="No repo specified. Pass 'repo' param or set GITHUB_REPO in .env",
+            detail="No repo specified. Sign in with GitHub and select a repo, or set GITHUB_REPO in .env",
+        )
+
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="No GitHub token available. Sign in with GitHub or set GITHUB_TOKEN in .env",
         )
 
     async def run_ingestion():
         _ingest_status["running"] = True
         try:
-            ingester = GitHubIngester(repo=target_repo)
+            ingester = GitHubIngester(token=token, repo=target_repo)
             stats = await ingester.ingest_all()
             _ingest_status["last_stats"] = stats
         finally:

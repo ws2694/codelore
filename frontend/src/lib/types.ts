@@ -56,3 +56,23 @@ export interface Expert {
 }
 
 export type Mode = 'ask' | 'onboard' | 'explore';
+
+export interface AuthStatus {
+  authenticated: boolean;
+  method: 'oauth' | 'env' | null;
+  user: string | null;
+  avatar_url: string | null;
+  selected_repo: string | null;
+  oauth_configured: boolean;
+}
+
+export interface GitHubRepo {
+  full_name: string;
+  name: string;
+  owner: string;
+  description: string;
+  language: string;
+  stars: number;
+  updated_at: string;
+  private: boolean;
+}

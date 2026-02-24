@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     kibana_api_key: str = ""
     github_token: str = ""
     github_repo: str = ""
+    github_client_id: str = ""
+    github_client_secret: str = ""
     debug: bool = False
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 

@@ -1,7 +1,8 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { MessageCircle, GraduationCap, GitBranch, Activity, Database } from 'lucide-react';
+import { MessageCircle, GraduationCap, GitBranch, Activity, Database, GitFork } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { healthApi } from '../../lib/api';
+import { useAuth } from '../../hooks/useAuth';
 import type { HealthStatus } from '../../lib/types';
 
 const NAV_ITEMS = [
@@ -12,6 +13,7 @@ const NAV_ITEMS = [
 
 export default function MainLayout() {
   const location = useLocation();
+  const { auth } = useAuth();
   const [health, setHealth] = useState<HealthStatus | null>(null);
 
   useEffect(() => {
@@ -63,6 +65,26 @@ export default function MainLayout() {
             );
           })}
         </nav>
+
+        {/* Connected repo */}
+        {auth?.selected_repo && (
+          <div className="px-4 py-3 border-t border-gray-800/50">
+            <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
+              <GitFork className="w-3 h-3" />
+              <span className="text-gray-500">Connected repo</span>
+            </div>
+            <p className="text-sm text-white font-medium truncate">{auth.selected_repo}</p>
+            {auth.user && (
+              <p className="text-[10px] text-gray-500 mt-0.5">@{auth.user}</p>
+            )}
+            <NavLink
+              to="/setup"
+              className="text-[10px] text-brand-400 hover:text-brand-300 mt-1 inline-block"
+            >
+              Switch repo
+            </NavLink>
+          </div>
+        )}
 
         {/* Status footer */}
         <div className="p-4 border-t border-gray-800/50 space-y-2">
