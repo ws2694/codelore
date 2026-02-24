@@ -176,3 +176,39 @@ async def get_module_experts(module: str, limit: int = 5):
         })
 
     return {"module": module, "experts": experts}
+
+
+@router.get("/popular-files")
+async def get_popular_files(limit: int = Query(default=8, le=30)):
+    """Get the most frequently changed files across all commits."""
+    es = get_es_client()
+
+    result = es.search(
+        index="codelore-commits",
+        body={
+            "query": {"match_all": {}},
+            "aggs": {
+                "top_files": {
+                    "terms": {"field": "files_changed", "size": limit * 3},
+                }
+            },
+            "size": 0,
+        },
+    )
+
+    files = []
+    for bucket in result["aggregations"]["top_files"]["buckets"]:
+        filepath = bucket["key"]
+        # Skip lockfiles and generated files
+        if any(skip in filepath.lower() for skip in [
+            "package-lock", "yarn.lock", ".lock", ".min.", ".map",
+        ]):
+            continue
+        files.append({
+            "path": filepath,
+            "commits": bucket["doc_count"],
+        })
+        if len(files) >= limit:
+            break
+
+    return {"files": files}

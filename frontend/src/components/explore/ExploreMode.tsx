@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { GitBranch, Search, Lightbulb, TrendingUp, X } from 'lucide-react';
 import { useTimeline, useDecisions } from '../../hooks/useTimeline';
+import { exploreApi } from '../../lib/api';
 import Timeline from './Timeline';
 import DecisionGraph from './DecisionGraph';
 import { LoadingSkeleton } from '../shared/LoadingState';
@@ -118,7 +119,7 @@ export default function ExploreMode() {
               No history found for <code className="text-brand-300">{searchedPath}</code>
             </div>
           ) : (
-            <EmptyExplore />
+            <EmptyExplore onSelect={(path) => { setSearchInput(path); searchTimeline(path); }} />
           )
         ) : decisionsLoading ? (
           <LoadingSkeleton lines={5} />
@@ -162,29 +163,37 @@ export default function ExploreMode() {
   );
 }
 
-function EmptyExplore() {
-  const SAMPLE_PATHS = [
-    'src/auth/',
-    'src/payments/webhook.ts',
-    'src/api/graphql/',
-    'src/notifications/',
-  ];
+function EmptyExplore({ onSelect }: { onSelect: (path: string) => void }) {
+  const [popularFiles, setPopularFiles] = useState<{ path: string; commits: number }[]>([]);
+
+  useEffect(() => {
+    exploreApi.getPopularFiles(8).then((res) => setPopularFiles(res.files)).catch(() => {});
+  }, []);
 
   return (
-    <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center">
+    <div className="flex flex-col items-center justify-center h-full max-w-lg mx-auto text-center">
       <GitBranch className="w-12 h-12 text-gray-700 mb-4" />
       <h3 className="text-lg font-medium text-gray-300 mb-2">Code Archaeology</h3>
       <p className="text-sm text-gray-500 mb-6">
         Search for a file or directory to see its complete history — every commit, PR, and decision that shaped it.
       </p>
-      <div className="space-y-2 w-full">
-        <p className="text-xs text-gray-600 uppercase tracking-wider mb-2">Try searching for:</p>
-        {SAMPLE_PATHS.map((p) => (
-          <div key={p} className="text-sm text-gray-400 bg-gray-800/30 rounded-lg px-3 py-2 font-mono">
-            {p}
-          </div>
-        ))}
-      </div>
+      {popularFiles.length > 0 ? (
+        <div className="space-y-1.5 w-full">
+          <p className="text-xs text-gray-600 uppercase tracking-wider mb-2">Most active files:</p>
+          {popularFiles.map((f) => (
+            <button
+              key={f.path}
+              onClick={() => onSelect(f.path)}
+              className="w-full text-left flex items-center justify-between text-sm text-gray-400 bg-gray-800/30 hover:bg-gray-800/60 rounded-lg px-3 py-2 font-mono transition-colors"
+            >
+              <span className="truncate">{f.path}</span>
+              <span className="text-xs text-gray-600 shrink-0 ml-2">{f.commits} commits</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-600">Ingest a repository to see file history.</p>
+      )}
     </div>
   );
 }

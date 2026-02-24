@@ -33,6 +33,11 @@ export const exploreApi = {
     const { data } = await api.get(`/explore/experts/${encodeURIComponent(module)}`);
     return data as { module: string; experts: Expert[] };
   },
+
+  getPopularFiles: async (limit = 8) => {
+    const { data } = await api.get('/explore/popular-files', { params: { limit } });
+    return data as { files: { path: string; commits: number }[] };
+  },
 };
 
 export const onboardApi = {
