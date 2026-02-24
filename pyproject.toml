@@ -1,0 +1,18 @@
+[project]
+name = "codelore"
+version = "0.1.0"
+description = "Codebase Memory Agent — indexes the WHY behind code"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic-settings>=2.6.0",
+    "elasticsearch>=8.12.0",
+    "sentence-transformers>=2.2.0",
+    "httpx>=0.28.0",
+    "python-multipart>=0.0.18",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

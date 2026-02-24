@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-950 text-gray-100 antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-gray-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-700 rounded-full;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-gray-900/60 backdrop-blur-xl border border-gray-800/50 rounded-xl;
+  }
+
+  .glow-brand {
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+  }
+}
+
+/* Markdown content styling */
+.markdown-body h1 { @apply text-2xl font-bold mt-6 mb-3 text-white; }
+.markdown-body h2 { @apply text-xl font-semibold mt-5 mb-2 text-white; }
+.markdown-body h3 { @apply text-lg font-medium mt-4 mb-2 text-gray-200; }
+.markdown-body p { @apply mb-3 leading-relaxed text-gray-300; }
+.markdown-body ul { @apply list-disc pl-5 mb-3 space-y-1 text-gray-300; }
+.markdown-body ol { @apply list-decimal pl-5 mb-3 space-y-1 text-gray-300; }
+.markdown-body code { @apply bg-gray-800 text-brand-300 px-1.5 py-0.5 rounded text-sm font-mono; }
+.markdown-body pre { @apply bg-gray-900 border border-gray-800 rounded-lg p-4 mb-4 overflow-x-auto; }
+.markdown-body pre code { @apply bg-transparent text-gray-300 p-0; }
+.markdown-body blockquote { @apply border-l-4 border-brand-500 pl-4 italic text-gray-400 mb-3; }
+.markdown-body strong { @apply text-white font-semibold; }
+.markdown-body a { @apply text-brand-400 hover:text-brand-300 underline; }
+.markdown-body hr { @apply border-gray-800 my-6; }
