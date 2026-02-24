@@ -32,18 +32,22 @@ class AgentBuilderClient:
         if conversation_id:
             payload["conversation_id"] = conversation_id
 
-        async with httpx.AsyncClient(headers=self.headers, timeout=90.0) as client:
-            resp = await client.post(
-                f"{self.kibana_url}/api/agent_builder/converse",
-                json=payload,
-            )
-            if resp.status_code >= 400:
-                logger.error("Agent Builder HTTP %d: %s", resp.status_code, resp.text[:500])
-            resp.raise_for_status()
-            data = resp.json()
-            logger.info("Agent Builder response keys: %s", list(data.keys()) if isinstance(data, dict) else type(data).__name__)
-            logger.debug("Agent Builder full response: %s", data)
-            return data
+        try:
+            async with httpx.AsyncClient(headers=self.headers, timeout=180.0) as client:
+                resp = await client.post(
+                    f"{self.kibana_url}/api/agent_builder/converse",
+                    json=payload,
+                )
+        except Exception as e:
+            print(f"[AgentBuilder] Connection error: {type(e).__name__}: {e}")
+            raise
+
+        if resp.status_code >= 400:
+            print(f"[AgentBuilder] HTTP {resp.status_code}: {resp.text[:500]}")
+        resp.raise_for_status()
+        data = resp.json()
+        print(f"[AgentBuilder] OK — keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
+        return data
 
     async def list_tools(self) -> list[dict]:
         async with httpx.AsyncClient(headers=self.headers, timeout=15.0) as client:
