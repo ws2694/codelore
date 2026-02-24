@@ -142,11 +142,8 @@ python -m backend.scripts.setup_indices
 # Register Agent Builder tools and agent
 python -m backend.scripts.setup_agent
 
-# Seed demo data (optional — provides a realistic demo scenario)
-python -m backend.scripts.seed_demo_data
-
-# Or ingest from a real GitHub repo (configured in .env)
-# python -m backend.scripts.ingest
+# Ingest from your GitHub repo (configured in .env)
+python -m backend.scripts.ingest
 
 # Start API server
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
@@ -164,17 +161,11 @@ npm run dev    # Starts on http://localhost:3000, proxies /api to :8000
 
 Visit http://localhost:3000. The sidebar should show green Elasticsearch status and document counts across all indices.
 
-## Demo Data
+## Live Data — Real GitHub Repository
 
-The `seed_demo_data.py` script populates all 5 indices with a realistic scenario for a fictional **ACME WebApp**:
+CodeLore is connected to a **real GitHub repository**, not synthetic demo data. The ingestion pipeline fetches actual commits (with diffs), pull requests (with reviews and comments), and architecture docs via the GitHub API. All ingested text is embedded with Sentence Transformers for semantic search.
 
-- **14 commits** spanning architecture evolution (JWT auth, Redis migration, GraphQL, WebSocket)
-- **15+ PR events** with review discussions and design debates
-- **5 documents** (README + 4 ADRs)
-- **5 Slack thread summaries** linked to code decisions
-- **8 architectural decisions** with rationale, alternatives, and importance scores
-
-This enables full demonstration of all features without requiring a real repository.
+This means every answer from the agent is grounded in real commit history, real PR discussions, and real design decisions — demonstrating CodeLore's value on a production codebase.
 
 ## Project Structure
 
@@ -195,7 +186,7 @@ codelore/
 │   ├── scripts/
 │   │   ├── setup_indices.py  # Create ES indices
 │   │   ├── setup_agent.py    # Register tools + agent
-│   │   └── seed_demo_data.py # Populate demo scenario
+│   │   └── ingest.py         # GitHub ingestion pipeline
 │   ├── models/schemas.py     # Pydantic request/response models
 │   ├── config.py             # Settings from .env
 │   └── main.py               # FastAPI app
