@@ -3,7 +3,7 @@ import { Brain, RotateCcw, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useChat } from '../../hooks/useChat';
 import ChatInput from '../shared/ChatInput';
-import { LoadingDots } from '../shared/LoadingState';
+import { ThinkingIndicator } from '../shared/LoadingState';
 
 const SAMPLE_QUESTIONS = [
   'Why does the auth service use Redis instead of Postgres?',
@@ -14,7 +14,7 @@ const SAMPLE_QUESTIONS = [
 ];
 
 export default function AskMode() {
-  const { messages, isLoading, error, sendMessage, clearChat } = useChat();
+  const { messages, isLoading, isStreaming, statusMessage, error, sendMessage, clearChat } = useChat();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -80,16 +80,18 @@ export default function AskMode() {
                   }`}
                 >
                   {msg.role === 'assistant' ? (
-                    <div className="markdown-body text-sm">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
-                    </div>
+                    msg.content ? (
+                      <div className="markdown-body text-sm">
+                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      </div>
+                    ) : null
                   ) : (
                     <p className="text-sm">{msg.content}</p>
                   )}
                 </div>
               </div>
             ))}
-            {isLoading && <LoadingDots />}
+            {isLoading && <ThinkingIndicator message={statusMessage} />}
             {error && (
               <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3">
                 {error}
@@ -105,7 +107,7 @@ export default function AskMode() {
         <div className="max-w-3xl mx-auto">
           <ChatInput
             onSend={(msg) => sendMessage(msg)}
-            isLoading={isLoading}
+            isLoading={isLoading || isStreaming}
             placeholder="Ask about design decisions, architecture rationale, code history..."
           />
         </div>

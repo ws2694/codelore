@@ -57,6 +57,35 @@ export interface Expert {
 
 export type Mode = 'ask' | 'onboard' | 'explore';
 
+// SSE streaming types
+export interface SSEStatusEvent {
+  phase: 'thinking' | 'streaming';
+  message: string;
+}
+
+export interface SSEChunkEvent {
+  text: string;
+}
+
+export interface SSEMetadataEvent {
+  conversation_id?: string;
+  step?: number;
+  sources?: ToolCall[];
+}
+
+export interface SSEErrorEvent {
+  message: string;
+  code: number;
+}
+
+export type SSEEventHandler = {
+  onStatus?: (data: SSEStatusEvent) => void;
+  onChunk?: (data: SSEChunkEvent) => void;
+  onMetadata?: (data: SSEMetadataEvent) => void;
+  onDone?: () => void;
+  onError?: (data: SSEErrorEvent) => void;
+};
+
 export interface AuthStatus {
   authenticated: boolean;
   method: 'oauth' | 'env' | null;

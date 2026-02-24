@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { GraduationCap, ArrowRight, ArrowLeft, RotateCcw, BookOpen, Layers, Clock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { onboardApi } from '../../lib/api';
-import { LoadingDots } from '../shared/LoadingState';
+import { onboardStreamApi } from '../../lib/api';
+import { ThinkingIndicator } from '../shared/LoadingState';
+import type { SSEEventHandler } from '../../lib/types';
 
 const TOPICS = [
   { id: 'architecture', label: 'Architecture Overview', icon: Layers, desc: 'High-level system design and key modules' },
@@ -22,32 +23,73 @@ export default function OnboardMode() {
   const [steps, setSteps] = useState<OnboardState[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [selectedTopic, setSelectedTopic] = useState('');
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
 
   const startOnboarding = async (topic: string) => {
     setIsLoading(true);
+    setIsStreaming(false);
     setError(null);
     setSelectedTopic(topic);
+    setStatusMessage('Preparing your learning path...');
+
+    const isModule = !['architecture', 'recent'].includes(topic);
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    let content = '';
+    let conversationId = '';
+
+    const handlers: SSEEventHandler = {
+      onStatus: (data) => {
+        if (data.phase === 'thinking') {
+          setStatusMessage(data.message);
+        } else if (data.phase === 'streaming') {
+          setIsLoading(false);
+          setIsStreaming(true);
+          setSteps([{ step: 1, content: '', conversationId: '' }]);
+          setCurrentIndex(0);
+          setStarted(true);
+        }
+      },
+      onChunk: (data) => {
+        content += data.text;
+        setSteps([{ step: 1, content, conversationId }]);
+      },
+      onMetadata: (data) => {
+        conversationId = data.conversation_id || '';
+        setSteps([{ step: 1, content, conversationId }]);
+      },
+      onDone: () => {
+        setIsLoading(false);
+        setIsStreaming(false);
+      },
+      onError: (data) => {
+        setIsLoading(false);
+        setIsStreaming(false);
+        setError(data.message);
+      },
+    };
 
     try {
-      const isModule = !['architecture', 'recent'].includes(topic);
-      const result = await onboardApi.start(
+      await onboardStreamApi.start(
+        handlers,
         isModule ? topic : undefined,
         isModule ? undefined : topic,
+        controller.signal,
       );
-
-      setSteps([{
-        step: result.step,
-        content: result.content,
-        conversationId: result.conversation_id,
-      }]);
-      setCurrentIndex(0);
-      setStarted(true);
     } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Failed to start onboarding');
-    } finally {
       setIsLoading(false);
+      setIsStreaming(false);
     }
   };
 
@@ -62,20 +104,66 @@ export default function OnboardMode() {
     }
 
     setIsLoading(true);
+    setIsStreaming(false);
     setError(null);
+    setStatusMessage('Loading next step...');
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const newStepNum = current.step + 1;
+    let content = '';
+    let conversationId = current.conversationId;
+    const targetIndex = steps.length;
+
+    const handlers: SSEEventHandler = {
+      onStatus: (data) => {
+        if (data.phase === 'thinking') {
+          setStatusMessage(data.message);
+        } else if (data.phase === 'streaming') {
+          setIsLoading(false);
+          setIsStreaming(true);
+          setSteps((prev) => [...prev, { step: newStepNum, content: '', conversationId }]);
+          setCurrentIndex(targetIndex);
+        }
+      },
+      onChunk: (data) => {
+        content += data.text;
+        setSteps((prev) =>
+          prev.map((s, i) => (i === targetIndex ? { ...s, content } : s)),
+        );
+      },
+      onMetadata: (data) => {
+        if (data.conversation_id) {
+          conversationId = data.conversation_id;
+          setSteps((prev) =>
+            prev.map((s, i) => (i === targetIndex ? { ...s, conversationId } : s)),
+          );
+        }
+      },
+      onDone: () => {
+        setIsLoading(false);
+        setIsStreaming(false);
+      },
+      onError: (data) => {
+        setIsLoading(false);
+        setIsStreaming(false);
+        setError(data.message);
+      },
+    };
 
     try {
-      const result = await onboardApi.next(current.conversationId, current.step);
-      setSteps((prev) => [...prev, {
-        step: result.step,
-        content: result.content,
-        conversationId: result.conversation_id,
-      }]);
-      setCurrentIndex(steps.length);
+      await onboardStreamApi.next(
+        current.conversationId,
+        current.step,
+        handlers,
+        controller.signal,
+      );
     } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Failed to load next step');
-    } finally {
       setIsLoading(false);
+      setIsStreaming(false);
     }
   };
 
@@ -84,14 +172,18 @@ export default function OnboardMode() {
   };
 
   const reset = () => {
+    abortRef.current?.abort();
     setStarted(false);
     setSteps([]);
     setCurrentIndex(0);
+    setIsLoading(false);
+    setIsStreaming(false);
     setError(null);
     setSelectedTopic('');
   };
 
   const currentStep = steps[currentIndex];
+  const isBusy = isLoading || isStreaming;
 
   return (
     <div className="flex flex-col h-full">
@@ -141,7 +233,7 @@ export default function OnboardMode() {
                   <button
                     key={topic.id}
                     onClick={() => startOnboarding(topic.id)}
-                    disabled={isLoading}
+                    disabled={isBusy}
                     className="glass-panel p-5 text-left hover:border-brand-500/30 transition-all group disabled:opacity-50"
                   >
                     <Icon className="w-5 h-5 text-brand-400 mb-3" />
@@ -156,7 +248,7 @@ export default function OnboardMode() {
 
             {isLoading && (
               <div className="mt-6">
-                <LoadingDots />
+                <ThinkingIndicator message={statusMessage} />
               </div>
             )}
             {error && (
@@ -187,7 +279,7 @@ export default function OnboardMode() {
             </div>
 
             {/* Step content */}
-            {currentStep && (
+            {currentStep && currentStep.content && (
               <div className="glass-panel p-6">
                 <div className="markdown-body text-sm">
                   <ReactMarkdown>{currentStep.content}</ReactMarkdown>
@@ -197,7 +289,7 @@ export default function OnboardMode() {
 
             {isLoading && (
               <div className="mt-4">
-                <LoadingDots />
+                <ThinkingIndicator message={statusMessage} />
               </div>
             )}
             {error && (
@@ -224,7 +316,7 @@ export default function OnboardMode() {
             <span className="text-xs text-gray-500">Step {currentIndex + 1}</span>
             <button
               onClick={nextStep}
-              disabled={isLoading}
+              disabled={isBusy}
               className="flex items-center gap-2 text-sm text-white bg-brand-600 hover:bg-brand-500 disabled:opacity-50 px-4 py-2 rounded-lg transition-colors"
             >
               Continue

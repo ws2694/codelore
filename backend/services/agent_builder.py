@@ -17,6 +17,19 @@ class AgentBuilderClient:
             "kbn-xsrf": "true",
             "Content-Type": "application/json",
         }
+        self._client = httpx.AsyncClient(
+            headers=self.headers,
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=180.0,
+                write=10.0,
+                pool=10.0,
+            ),
+        )
+
+    async def close(self):
+        """Close the underlying HTTP client. Call on app shutdown."""
+        await self._client.aclose()
 
     async def converse(
         self,
@@ -33,33 +46,30 @@ class AgentBuilderClient:
             payload["conversation_id"] = conversation_id
 
         try:
-            async with httpx.AsyncClient(headers=self.headers, timeout=180.0) as client:
-                resp = await client.post(
-                    f"{self.kibana_url}/api/agent_builder/converse",
-                    json=payload,
-                )
+            resp = await self._client.post(
+                f"{self.kibana_url}/api/agent_builder/converse",
+                json=payload,
+            )
         except Exception as e:
-            print(f"[AgentBuilder] Connection error: {type(e).__name__}: {e}")
+            logger.error("[AgentBuilder] Connection error: %s: %s", type(e).__name__, e)
             raise
 
         if resp.status_code >= 400:
-            print(f"[AgentBuilder] HTTP {resp.status_code}: {resp.text[:500]}")
+            logger.error("[AgentBuilder] HTTP %d: %s", resp.status_code, resp.text[:500])
         resp.raise_for_status()
         data = resp.json()
-        print(f"[AgentBuilder] OK — keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
+        logger.info("[AgentBuilder] OK — keys: %s", list(data.keys()) if isinstance(data, dict) else type(data).__name__)
         return data
 
     async def list_tools(self) -> list[dict]:
-        async with httpx.AsyncClient(headers=self.headers, timeout=15.0) as client:
-            resp = await client.get(f"{self.kibana_url}/api/agent_builder/tools")
-            resp.raise_for_status()
-            return resp.json()
+        resp = await self._client.get(f"{self.kibana_url}/api/agent_builder/tools")
+        resp.raise_for_status()
+        return resp.json()
 
     async def list_agents(self) -> list[dict]:
-        async with httpx.AsyncClient(headers=self.headers, timeout=15.0) as client:
-            resp = await client.get(f"{self.kibana_url}/api/agent_builder/agents")
-            resp.raise_for_status()
-            return resp.json()
+        resp = await self._client.get(f"{self.kibana_url}/api/agent_builder/agents")
+        resp.raise_for_status()
+        return resp.json()
 
 
 _client: AgentBuilderClient | None = None
@@ -70,3 +80,11 @@ def get_agent_builder() -> AgentBuilderClient:
     if _client is None:
         _client = AgentBuilderClient()
     return _client
+
+
+async def close_agent_builder():
+    """Shutdown hook — close the shared HTTP client."""
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None

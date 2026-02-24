@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { HealthStatus, TimelineEntry, Decision, Expert, OnboardStep, AuthStatus, GitHubRepo } from './types';
+import type { HealthStatus, TimelineEntry, Decision, Expert, OnboardStep, AuthStatus, GitHubRepo, SSEEventHandler } from './types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -106,4 +106,126 @@ export const githubApi = {
     });
     return data as { repos: GitHubRepo[]; page: number; per_page: number };
   },
+};
+
+// ── SSE streaming ───────────────────────────────────────────────────────
+
+async function fetchSSE(
+  url: string,
+  body: Record<string, unknown> | null,
+  params: Record<string, string | number | undefined>,
+  handlers: SSEEventHandler,
+  signal?: AbortSignal,
+): Promise<void> {
+  const queryParts: string[] = [];
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') {
+      queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+    }
+  }
+  const qs = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+
+  const response = await fetch(`/api${url}${qs}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+    signal,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    handlers.onError?.({ message: text || `HTTP ${response.status}`, code: response.status });
+    return;
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    handlers.onError?.({ message: 'No response body', code: 0 });
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for (const part of parts) {
+        if (!part.trim()) continue;
+
+        let eventType = '';
+        let eventData = '';
+
+        for (const line of part.split('\n')) {
+          if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+          else if (line.startsWith('data: ')) eventData = line.slice(6);
+        }
+
+        if (!eventType || !eventData) continue;
+
+        try {
+          const parsed = JSON.parse(eventData);
+          switch (eventType) {
+            case 'status':   handlers.onStatus?.(parsed); break;
+            case 'chunk':    handlers.onChunk?.(parsed); break;
+            case 'metadata': handlers.onMetadata?.(parsed); break;
+            case 'done':     handlers.onDone?.(); break;
+            case 'error':    handlers.onError?.(parsed); break;
+          }
+        } catch {
+          // skip malformed JSON
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export const chatStreamApi = {
+  ask: (
+    question: string,
+    handlers: SSEEventHandler,
+    conversationId?: string,
+    mode = 'ask',
+    signal?: AbortSignal,
+  ) =>
+    fetchSSE(
+      '/chat/ask/stream',
+      { question, conversation_id: conversationId, mode },
+      {},
+      handlers,
+      signal,
+    ),
+};
+
+export const onboardStreamApi = {
+  start: (
+    handlers: SSEEventHandler,
+    module?: string,
+    topic?: string,
+    signal?: AbortSignal,
+  ) =>
+    fetchSSE('/onboard/start/stream', null, { module, topic }, handlers, signal),
+
+  next: (
+    conversationId: string,
+    currentStep: number,
+    handlers: SSEEventHandler,
+    signal?: AbortSignal,
+  ) =>
+    fetchSSE(
+      '/onboard/next/stream',
+      null,
+      { conversation_id: conversationId, current_step: currentStep },
+      handlers,
+      signal,
+    ),
 };
