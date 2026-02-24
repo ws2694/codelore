@@ -22,7 +22,7 @@ class GitHubIngester:
         }
         self.base_url = "https://api.github.com"
         self.es = get_es_client()
-        self.stats = {"commits": 0, "prs": 0, "pr_events": 0, "docs": 0}
+        self.stats = {"commits": 0, "prs": 0, "pr_events": 0, "docs": 0, "decisions": 0}
 
     async def ingest_all(self) -> dict:
         """Run full ingestion pipeline."""
@@ -31,6 +31,7 @@ class GitHubIngester:
             await self.ingest_commits()
             await self.ingest_prs()
             await self.ingest_docs()
+            await self.synthesize_decisions()
         return self.stats
 
     async def ingest_commits(self, max_pages: int = 5):
@@ -301,6 +302,213 @@ class GitHubIngester:
                 "embedding": embed_text(f"{title}\n{section}"),
             })
             self.stats["docs"] += 1
+
+    async def synthesize_decisions(self):
+        """Synthesize architectural decisions from merged PRs and high-impact commits."""
+        print(f"Synthesizing decisions from {self.repo}...")
+        actions = []
+
+        # --- From merged PRs ---
+        page = 1
+        while page <= 3:
+            resp = await self.client.get(
+                f"{self.base_url}/repos/{self.repo}/pulls",
+                params={"state": "closed", "per_page": 50, "page": page},
+            )
+            if resp.status_code != 200:
+                break
+
+            prs = resp.json()
+            if not prs:
+                break
+
+            for pr in prs:
+                if not pr.get("merged_at"):
+                    continue
+
+                body = pr.get("body", "") or ""
+                title = pr.get("title", "")
+
+                if len(body) < 30 and len(title) < 15:
+                    continue
+
+                pr_num = pr["number"]
+                author = (pr.get("user") or {}).get("login", "unknown")
+                labels = [l["name"] for l in pr.get("labels", [])]
+
+                rationale_parts = []
+                rev_resp = await self.client.get(
+                    f"{self.base_url}/repos/{self.repo}/pulls/{pr_num}/reviews"
+                )
+                if rev_resp.status_code == 200:
+                    for review in rev_resp.json():
+                        r_body = review.get("body", "") or ""
+                        if r_body.strip():
+                            reviewer = (review.get("user") or {}).get("login", "")
+                            rationale_parts.append(f"@{reviewer}: {r_body}")
+
+                files_resp = await self.client.get(
+                    f"{self.base_url}/repos/{self.repo}/pulls/{pr_num}/files"
+                )
+                affected_files = []
+                if files_resp.status_code == 200:
+                    affected_files = [f["filename"] for f in files_resp.json()[:20]]
+
+                modules = self._extract_modules(affected_files)
+                rationale = "\n\n".join(rationale_parts) if rationale_parts else body
+                summary = body[:500] if body else title
+
+                importance = min(
+                    (len(affected_files) * 0.2) + (len(rationale_parts) * 0.5) + 1.0,
+                    5.0,
+                )
+
+                embed_input = f"{title}\n{summary}\n{rationale[:300]}"
+
+                actions.append({
+                    "_index": "codelore-decisions",
+                    "_id": f"pr-{pr_num}",
+                    "decision_id": f"pr-{pr_num}",
+                    "title": title,
+                    "summary": summary,
+                    "rationale": rationale,
+                    "alternatives_considered": "",
+                    "decided_by": author,
+                    "decided_at": pr.get("merged_at"),
+                    "status": "accepted",
+                    "tags": labels,
+                    "affected_files": affected_files,
+                    "affected_modules": list(modules),
+                    "related_commits": [],
+                    "related_prs": [pr_num],
+                    "source_type": "pull_request",
+                    "source_ids": [f"pr-{pr_num}"],
+                    "repo": self.repo,
+                    "importance": importance,
+                    "embedding": embed_text(embed_input),
+                })
+
+            page += 1
+
+        pr_count = len(actions)
+
+        # --- From high-impact commits ---
+        # Commits that touch 3+ files or have multi-line messages represent decisions
+        pr_shas = set()  # track PR-linked commits to avoid duplicates
+        page = 1
+        while page <= 5:
+            resp = await self.client.get(
+                f"{self.base_url}/repos/{self.repo}/commits",
+                params={"per_page": 100, "page": page},
+            )
+            if resp.status_code != 200:
+                break
+
+            commits = resp.json()
+            if not commits:
+                break
+
+            for commit in commits:
+                sha = commit.get("sha", "")
+                commit_data = commit.get("commit", {})
+                message = commit_data.get("message", "")
+
+                # Skip merge commits and trivial one-liners
+                lines = [l for l in message.split("\n") if l.strip()]
+                title_line = lines[0] if lines else message[:80]
+
+                if title_line.lower().startswith("merge"):
+                    continue
+
+                # Fetch detail for file count
+                detail_resp = await self.client.get(
+                    f"{self.base_url}/repos/{self.repo}/commits/{sha}"
+                )
+                if detail_resp.status_code != 200:
+                    continue
+
+                detail = detail_resp.json()
+                files = detail.get("files", [])
+                stats = detail.get("stats", {})
+                total_changes = stats.get("total", 0)
+                affected_files = [f["filename"] for f in files[:20]]
+
+                # Decision criteria: 3+ files changed, OR 50+ lines changed,
+                # OR multi-line commit message (rationale in body)
+                has_body = len(lines) > 1
+                is_significant = len(files) >= 3 or total_changes >= 50 or has_body
+
+                if not is_significant:
+                    continue
+
+                author = (commit.get("author") or {}).get("login", "unknown")
+                date = commit_data.get("author", {}).get("date")
+                body_text = "\n".join(lines[1:]).strip() if has_body else ""
+
+                modules = self._extract_modules(affected_files)
+
+                # Build summary from commit message body or diff stats
+                if body_text:
+                    summary = body_text[:500]
+                    rationale = body_text
+                else:
+                    file_summary = ", ".join(affected_files[:5])
+                    if len(affected_files) > 5:
+                        file_summary += f" (+{len(affected_files) - 5} more)"
+                    summary = f"Changed {len(files)} files ({stats.get('additions', 0)}+ {stats.get('deletions', 0)}-): {file_summary}"
+                    rationale = summary
+
+                importance = min(
+                    (len(files) * 0.15) + (total_changes * 0.002) + (1.0 if has_body else 0.5),
+                    5.0,
+                )
+
+                embed_input = f"{title_line}\n{summary}"
+
+                actions.append({
+                    "_index": "codelore-decisions",
+                    "_id": f"commit-{sha[:12]}",
+                    "decision_id": f"commit-{sha[:12]}",
+                    "title": title_line,
+                    "summary": summary,
+                    "rationale": rationale,
+                    "alternatives_considered": "",
+                    "decided_by": author,
+                    "decided_at": date,
+                    "status": "accepted",
+                    "tags": [],
+                    "affected_files": affected_files,
+                    "affected_modules": list(modules),
+                    "related_commits": [sha[:12]],
+                    "related_prs": [],
+                    "source_type": "commit",
+                    "source_ids": [sha[:12]],
+                    "repo": self.repo,
+                    "importance": importance,
+                    "embedding": embed_text(embed_input),
+                })
+
+            page += 1
+
+        commit_count = len(actions) - pr_count
+
+        if actions:
+            success, _ = bulk(self.es, actions)
+            self.stats["decisions"] = success
+            print(f"  Synthesized {success} decisions ({pr_count} from PRs, {commit_count} from commits)")
+        else:
+            print("  No PRs or commits with enough content to synthesize decisions")
+
+    def _extract_modules(self, files: list[str]) -> set[str]:
+        """Extract top-level module paths from file paths."""
+        modules = set()
+        for f in files:
+            parts = f.split("/")
+            if len(parts) >= 2:
+                modules.add(parts[0] + "/" + parts[1])
+            else:
+                modules.add(parts[0])
+        return modules
 
     def _split_into_sections(self, content: str) -> list[str]:
         """Split markdown content into sections by ## headings."""

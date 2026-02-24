@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { GitBranch, Search, Lightbulb, TrendingUp } from 'lucide-react';
+import { GitBranch, Search, Lightbulb, TrendingUp, X } from 'lucide-react';
 import { useTimeline, useDecisions } from '../../hooks/useTimeline';
 import Timeline from './Timeline';
 import DecisionGraph from './DecisionGraph';
@@ -10,6 +10,7 @@ type ExploreTab = 'timeline' | 'decisions';
 export default function ExploreMode() {
   const [tab, setTab] = useState<ExploreTab>('timeline');
   const [searchInput, setSearchInput] = useState('');
+  const [activeDecisionQuery, setActiveDecisionQuery] = useState('');
   const { entries, isLoading: timelineLoading, error: timelineError, searchTimeline, searchedPath } = useTimeline();
   const { decisions, isLoading: decisionsLoading, fetchDecisions } = useDecisions();
 
@@ -24,8 +25,15 @@ export default function ExploreMode() {
     if (tab === 'timeline') {
       searchTimeline(query);
     } else {
+      setActiveDecisionQuery(query);
       fetchDecisions(query);
     }
+  };
+
+  const clearDecisionSearch = () => {
+    setSearchInput('');
+    setActiveDecisionQuery('');
+    fetchDecisions();
   };
 
   return (
@@ -115,10 +123,38 @@ export default function ExploreMode() {
         ) : decisionsLoading ? (
           <LoadingSkeleton lines={5} />
         ) : decisions.length > 0 ? (
-          <DecisionGraph decisions={decisions} />
+          <div>
+            {activeDecisionQuery && (
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-sm text-gray-400">
+                  Results for <code className="text-brand-300">{activeDecisionQuery}</code>
+                </h3>
+                <button
+                  onClick={clearDecisionSearch}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                  Clear search
+                </button>
+              </div>
+            )}
+            <DecisionGraph decisions={decisions} />
+          </div>
+        ) : activeDecisionQuery ? (
+          <div className="text-center py-12">
+            <p className="text-gray-500 text-sm mb-3">
+              No decisions matching <code className="text-brand-300">{activeDecisionQuery}</code>
+            </p>
+            <button
+              onClick={clearDecisionSearch}
+              className="text-sm text-brand-400 hover:text-brand-300 transition-colors"
+            >
+              Show all decisions
+            </button>
+          </div>
         ) : (
           <div className="text-center py-12 text-gray-500 text-sm">
-            No decisions found. Try a different search or seed demo data.
+            No decisions found. Ingest a repository to populate this view.
           </div>
         )}
       </div>
