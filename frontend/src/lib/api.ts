@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { HealthStatus, TimelineEntry, Decision, Expert, OnboardStep, AuthStatus, GitHubRepo, SSEEventHandler } from './types';
+import type { HealthStatus, TimelineEntry, Decision, Expert, ExpertFinderResult, SemanticSearchResult, ImpactAnalysis, OnboardStep, AuthStatus, GitHubRepo, SSEEventHandler } from './types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -29,14 +29,24 @@ export const exploreApi = {
     return data as { decisions: Decision[]; total: number };
   },
 
-  getExperts: async (module: string) => {
-    const { data } = await api.get(`/explore/experts/${encodeURIComponent(module)}`);
-    return data as { module: string; experts: Expert[] };
+  getExperts: async (module: string, limit = 5) => {
+    const { data } = await api.get(`/explore/experts/${encodeURIComponent(module)}`, { params: { limit } });
+    return data as ExpertFinderResult;
   },
 
   getPopularFiles: async (limit = 8) => {
     const { data } = await api.get('/explore/popular-files', { params: { limit } });
     return data as { files: { path: string; commits: number }[] };
+  },
+
+  semanticSearch: async (query: string, indices?: string[], limit = 20) => {
+    const { data } = await api.post('/explore/semantic-search', { query, indices, limit });
+    return data as { query: string; results: SemanticSearchResult[] };
+  },
+
+  getImpact: async (filepath: string) => {
+    const { data } = await api.get(`/explore/impact/${encodeURIComponent(filepath)}`);
+    return data as ImpactAnalysis;
   },
 };
 

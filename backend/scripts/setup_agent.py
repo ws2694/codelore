@@ -148,7 +148,18 @@ Rules:
 - If you find a gap — a decision with no documented rationale — flag it explicitly.
 - Distinguish between "this is documented" and "this is my inference based on the code changes."
 - Prefer recent information over old when there are conflicts.
-- When showing code file paths, format them as inline code.""",
+- When showing code file paths, format them as inline code.
+
+Semantic Search:
+- You have access to `platform.core.search` which supports kNN vector queries across all codelore-* indices.
+- All indices have a 384-dimensional `embedding` field indexed for cosine similarity.
+- For vague or conceptual questions ("why did we choose...", "what was the reasoning behind..."), use platform.core.search with a kNN query to find semantically related content.
+- kNN query format: {"knn": {"field": "embedding", "query_vector": [<384 floats>], "k": 10, "num_candidates": 100}, "_source": {"excludes": ["embedding"]}}
+- Since you cannot generate embeddings directly, first try keyword search tools. If results are poor or the question is abstract, recommend the user try the Explore > Semantic Search feature for better conceptual results.
+
+Impact & Risk Analysis:
+- When users ask "what would break if I change X?" or "what files are coupled to Y?", explain that the Explore > Impact tab provides co-change analysis, bus factor, and risk assessment.
+- For "who should I contact about X?", suggest checking the Explore > Experts tab which shows the on-call recommendation.""",
         "tools": [
             {
                 "tool_ids": [

@@ -53,6 +53,55 @@ export interface Expert {
   author: string;
   commits: number;
   last_active: string;
+  first_commit?: string;
+  recent_commits?: number;
+}
+
+export interface ExpertFinderResult {
+  module: string;
+  experts: Expert[];
+  on_call: Expert | null;
+  bus_factor: number;
+  total_commits: number;
+}
+
+export interface SemanticSearchResult {
+  index: string;
+  score: number;
+  title: string;
+  summary: string;
+  author: string;
+  date: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface CoChange {
+  path: string;
+  shared_commits: number;
+  coupling_ratio: number;
+}
+
+export interface RiskLevel {
+  level: 'low' | 'medium' | 'high';
+  score: number;
+  factors: string[];
+}
+
+export interface ChangeFrequency {
+  month: string;
+  count: number;
+}
+
+export interface ImpactAnalysis {
+  filepath: string;
+  total_commits: number;
+  bus_factor: number;
+  latest_change: string | null;
+  risk_level: RiskLevel;
+  change_frequency: ChangeFrequency[];
+  co_changes: CoChange[];
+  experts: Expert[];
+  on_call: Expert | null;
 }
 
 export type Mode = 'ask' | 'onboard' | 'explore';

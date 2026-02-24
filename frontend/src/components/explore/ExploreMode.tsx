@@ -1,12 +1,23 @@
 import { useState, useEffect } from 'react';
-import { GitBranch, Search, Lightbulb, TrendingUp, X } from 'lucide-react';
-import { useTimeline, useDecisions } from '../../hooks/useTimeline';
+import { GitBranch, Search, Lightbulb, TrendingUp, Users, Shield, Sparkles, X } from 'lucide-react';
+import { useTimeline, useDecisions, useSemanticSearch, useExperts, useImpact } from '../../hooks/useTimeline';
 import { exploreApi } from '../../lib/api';
 import Timeline from './Timeline';
 import DecisionGraph from './DecisionGraph';
+import SemanticResults from './SemanticResults';
+import ExpertPanel from './ExpertPanel';
+import ImpactPanel from './ImpactPanel';
 import { LoadingSkeleton } from '../shared/LoadingState';
 
-type ExploreTab = 'timeline' | 'decisions';
+type ExploreTab = 'timeline' | 'decisions' | 'experts' | 'impact' | 'semantic';
+
+const TAB_CONFIG: Record<ExploreTab, { icon: typeof TrendingUp; label: string; placeholder: string }> = {
+  timeline:  { icon: TrendingUp, label: 'Timeline',  placeholder: 'Enter file path (e.g., src/auth/jwt.ts)' },
+  decisions: { icon: Lightbulb,  label: 'Decisions',  placeholder: 'Search decisions...' },
+  experts:   { icon: Users,      label: 'Experts',    placeholder: 'Enter module or file path (e.g., src/auth)' },
+  impact:    { icon: Shield,     label: 'Impact',     placeholder: 'Enter file path for impact analysis' },
+  semantic:  { icon: Sparkles,   label: 'Semantic',   placeholder: 'Ask a conceptual question (e.g., why did we choose Redis?)' },
+};
 
 export default function ExploreMode() {
   const [tab, setTab] = useState<ExploreTab>('timeline');
@@ -14,6 +25,9 @@ export default function ExploreMode() {
   const [activeDecisionQuery, setActiveDecisionQuery] = useState('');
   const { entries, isLoading: timelineLoading, error: timelineError, searchTimeline, searchedPath } = useTimeline();
   const { decisions, isLoading: decisionsLoading, fetchDecisions } = useDecisions();
+  const { results: semanticResults, isLoading: semanticLoading, error: semanticError, search: semanticSearch, searchedQuery } = useSemanticSearch();
+  const { result: expertResult, isLoading: expertsLoading, error: expertsError, searchExperts, searchedModule } = useExperts();
+  const { analysis: impactAnalysis, isLoading: impactLoading, error: impactError, analyzeImpact, searchedPath: impactPath } = useImpact();
 
   useEffect(() => {
     fetchDecisions();
@@ -25,9 +39,15 @@ export default function ExploreMode() {
     if (!query) return;
     if (tab === 'timeline') {
       searchTimeline(query);
-    } else {
+    } else if (tab === 'decisions') {
       setActiveDecisionQuery(query);
       fetchDecisions(query);
+    } else if (tab === 'experts') {
+      searchExperts(query);
+    } else if (tab === 'impact') {
+      analyzeImpact(query);
+    } else if (tab === 'semantic') {
+      semanticSearch(query);
     }
   };
 
@@ -35,6 +55,12 @@ export default function ExploreMode() {
     setSearchInput('');
     setActiveDecisionQuery('');
     fetchDecisions();
+  };
+
+  const handleImpactFileClick = (path: string) => {
+    setTab('timeline');
+    setSearchInput(path);
+    searchTimeline(path);
   };
 
   return (
@@ -50,29 +76,25 @@ export default function ExploreMode() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-4">
-          <button
-            onClick={() => setTab('timeline')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              tab === 'timeline'
-                ? 'bg-brand-600/20 text-brand-300 border border-brand-500/30'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5" />
-            File Timeline
-          </button>
-          <button
-            onClick={() => setTab('decisions')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              tab === 'decisions'
-                ? 'bg-brand-600/20 text-brand-300 border border-brand-500/30'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
-            }`}
-          >
-            <Lightbulb className="w-3.5 h-3.5" />
-            Decisions
-          </button>
+        <div className="flex gap-1 mb-4 overflow-x-auto">
+          {(Object.keys(TAB_CONFIG) as ExploreTab[]).map((key) => {
+            const cfg = TAB_CONFIG[key];
+            const Icon = cfg.icon;
+            return (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors whitespace-nowrap ${
+                  tab === key
+                    ? 'bg-brand-600/20 text-brand-300 border border-brand-500/30'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {cfg.label}
+              </button>
+            );
+          })}
         </div>
 
         {/* Search */}
@@ -82,7 +104,7 @@ export default function ExploreMode() {
             <input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder={tab === 'timeline' ? 'Enter file path (e.g., src/auth/jwt.ts)' : 'Search decisions...'}
+              placeholder={TAB_CONFIG[tab].placeholder}
               className="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm text-gray-200 placeholder-gray-500 outline-none focus:border-brand-500/50 transition-colors"
             />
           </div>
@@ -121,47 +143,116 @@ export default function ExploreMode() {
           ) : (
             <EmptyExplore onSelect={(path) => { setSearchInput(path); searchTimeline(path); }} />
           )
-        ) : decisionsLoading ? (
-          <LoadingSkeleton lines={5} />
-        ) : decisions.length > 0 ? (
-          <div>
-            {activeDecisionQuery && (
-              <div className="mb-4 flex items-center justify-between">
+
+        ) : tab === 'decisions' ? (
+          decisionsLoading ? (
+            <LoadingSkeleton lines={5} />
+          ) : decisions.length > 0 ? (
+            <div>
+              {activeDecisionQuery && (
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-sm text-gray-400">
+                    Results for <code className="text-brand-300">{activeDecisionQuery}</code>
+                  </h3>
+                  <button
+                    onClick={clearDecisionSearch}
+                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                    Clear search
+                  </button>
+                </div>
+              )}
+              <DecisionGraph decisions={decisions} />
+            </div>
+          ) : activeDecisionQuery ? (
+            <div className="text-center py-12">
+              <p className="text-gray-500 text-sm mb-3">
+                No decisions matching <code className="text-brand-300">{activeDecisionQuery}</code>
+              </p>
+              <button
+                onClick={clearDecisionSearch}
+                className="text-sm text-brand-400 hover:text-brand-300 transition-colors"
+              >
+                Show all decisions
+              </button>
+            </div>
+          ) : (
+            <div className="text-center py-12 text-gray-500 text-sm">
+              No decisions found. Ingest a repository to populate this view.
+            </div>
+          )
+
+        ) : tab === 'experts' ? (
+          expertsLoading ? (
+            <LoadingSkeleton lines={5} />
+          ) : expertsError ? (
+            <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3">
+              {expertsError}
+            </div>
+          ) : expertResult ? (
+            <div>
+              <div className="mb-4">
                 <h3 className="text-sm text-gray-400">
-                  Results for <code className="text-brand-300">{activeDecisionQuery}</code>
+                  Experts for <code className="text-brand-300">{searchedModule}</code>
                 </h3>
-                <button
-                  onClick={clearDecisionSearch}
-                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 transition-colors"
-                >
-                  <X className="w-3 h-3" />
-                  Clear search
-                </button>
               </div>
-            )}
-            <DecisionGraph decisions={decisions} />
-          </div>
-        ) : activeDecisionQuery ? (
-          <div className="text-center py-12">
-            <p className="text-gray-500 text-sm mb-3">
-              No decisions matching <code className="text-brand-300">{activeDecisionQuery}</code>
-            </p>
-            <button
-              onClick={clearDecisionSearch}
-              className="text-sm text-brand-400 hover:text-brand-300 transition-colors"
-            >
-              Show all decisions
-            </button>
-          </div>
-        ) : (
-          <div className="text-center py-12 text-gray-500 text-sm">
-            No decisions found. Ingest a repository to populate this view.
-          </div>
-        )}
+              <ExpertPanel result={expertResult} />
+            </div>
+          ) : (
+            <EmptyExperts />
+          )
+
+        ) : tab === 'impact' ? (
+          impactLoading ? (
+            <LoadingSkeleton lines={6} />
+          ) : impactError ? (
+            <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3">
+              {impactError}
+            </div>
+          ) : impactAnalysis ? (
+            <div>
+              <div className="mb-4">
+                <h3 className="text-sm text-gray-400">
+                  Impact analysis for <code className="text-brand-300">{impactPath}</code>
+                </h3>
+              </div>
+              <ImpactPanel analysis={impactAnalysis} onFileClick={handleImpactFileClick} />
+            </div>
+          ) : (
+            <EmptyImpact />
+          )
+
+        ) : tab === 'semantic' ? (
+          semanticLoading ? (
+            <LoadingSkeleton lines={6} />
+          ) : semanticError ? (
+            <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3">
+              {semanticError}
+            </div>
+          ) : semanticResults.length > 0 ? (
+            <div>
+              <div className="mb-4">
+                <h3 className="text-sm text-gray-400">
+                  Semantic results for <code className="text-brand-300">{searchedQuery}</code>
+                </h3>
+              </div>
+              <SemanticResults results={semanticResults} />
+            </div>
+          ) : searchedQuery ? (
+            <div className="text-center py-12 text-gray-500 text-sm">
+              No semantic matches for <code className="text-brand-300">{searchedQuery}</code>
+            </div>
+          ) : (
+            <EmptySemantic />
+          )
+        ) : null}
       </div>
     </div>
   );
 }
+
+// ── Empty States ────────────────────────────────────────────────────────
 
 function EmptyExplore({ onSelect }: { onSelect: (path: string) => void }) {
   const [popularFiles, setPopularFiles] = useState<{ path: string; commits: number }[]>([]);
@@ -194,6 +285,42 @@ function EmptyExplore({ onSelect }: { onSelect: (path: string) => void }) {
       ) : (
         <p className="text-sm text-gray-600">Ingest a repository to see file history.</p>
       )}
+    </div>
+  );
+}
+
+function EmptyExperts() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center">
+      <Users className="w-12 h-12 text-gray-700 mb-4" />
+      <h3 className="text-lg font-medium text-gray-300 mb-2">Expert Finder</h3>
+      <p className="text-sm text-gray-500">
+        Search for a module or file path to find the top contributors and on-call recommendation.
+      </p>
+    </div>
+  );
+}
+
+function EmptyImpact() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center">
+      <Shield className="w-12 h-12 text-gray-700 mb-4" />
+      <h3 className="text-lg font-medium text-gray-300 mb-2">Impact Analysis</h3>
+      <p className="text-sm text-gray-500">
+        Enter a file path to analyze its change impact — co-change patterns, coupling risk, bus factor, and who to contact.
+      </p>
+    </div>
+  );
+}
+
+function EmptySemantic() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center">
+      <Sparkles className="w-12 h-12 text-gray-700 mb-4" />
+      <h3 className="text-lg font-medium text-gray-300 mb-2">Semantic Search</h3>
+      <p className="text-sm text-gray-500">
+        Ask a conceptual question to find related commits, PRs, decisions, and docs using vector similarity — no exact keywords needed.
+      </p>
     </div>
   );
 }

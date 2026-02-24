@@ -46,6 +46,12 @@ class OnboardStep(BaseModel):
     sources: list[dict] = []
 
 
+class SemanticSearchRequest(BaseModel):
+    query: str
+    indices: list[str] | None = None
+    limit: int = 20
+
+
 class HealthResponse(BaseModel):
     status: str
     elasticsearch: bool
