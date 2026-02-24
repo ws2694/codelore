@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { GraduationCap, ArrowRight, ArrowLeft, RotateCcw, BookOpen, Layers, Clock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { onboardStreamApi } from '../../lib/api';
 import { ThinkingIndicator } from '../shared/LoadingState';
 import type { SSEEventHandler } from '../../lib/types';
@@ -282,7 +283,7 @@ export default function OnboardMode() {
             {currentStep && currentStep.content && (
               <div className="glass-panel p-6">
                 <div className="markdown-body text-sm">
-                  <ReactMarkdown>{currentStep.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{currentStep.content}</ReactMarkdown>
                 </div>
               </div>
             )}

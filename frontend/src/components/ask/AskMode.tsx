@@ -1,6 +1,7 @@
 import { useRef, useEffect } from 'react';
 import { Brain, RotateCcw, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useChat } from '../../hooks/useChat';
 import ChatInput from '../shared/ChatInput';
 import { ThinkingIndicator } from '../shared/LoadingState';
@@ -82,7 +83,7 @@ export default function AskMode() {
                   {msg.role === 'assistant' ? (
                     msg.content ? (
                       <div className="markdown-body text-sm">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                       </div>
                     ) : null
                   ) : (

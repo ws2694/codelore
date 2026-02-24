@@ -42,3 +42,17 @@
 .markdown-body strong { @apply text-white font-semibold; }
 .markdown-body a { @apply text-brand-400 hover:text-brand-300 underline; }
 .markdown-body hr { @apply border-gray-800 my-6; }
+
+/* Tables */
+.markdown-body table { @apply w-full border-collapse mb-4 text-sm; }
+.markdown-body thead { @apply border-b-2 border-gray-700; }
+.markdown-body th { @apply text-left text-gray-200 font-semibold px-3 py-2 bg-gray-800/60; }
+.markdown-body td { @apply text-gray-300 px-3 py-2 border-b border-gray-800/50; }
+.markdown-body tr:hover td { @apply bg-gray-800/30; }
+.markdown-body th:first-child { @apply rounded-tl-lg; }
+.markdown-body th:last-child { @apply rounded-tr-lg; }
+
+/* Numbered headings (e.g. "2. Five Elasticsearch Indices") */
+.markdown-body h2 + table,
+.markdown-body h3 + table { @apply mt-2; }
+.markdown-body li > p { @apply mb-1; }
