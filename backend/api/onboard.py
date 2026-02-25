@@ -9,6 +9,7 @@ from backend.config import get_settings
 from backend.services.agent_builder import get_agent_builder
 from backend.services.auth_store import get_auth_state
 from backend.services.sse_helpers import stream_response, sse_event, sse_error
+from backend.services import cache
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +69,26 @@ def _extract(result: dict) -> str:
 # ── Non-streaming endpoints (kept for backward compatibility) ────────────
 
 
+async def _start_cached(module: str, topic: str) -> dict:
+    """Call Agent Builder for onboard start with caching."""
+    repo = get_auth_state().selected_repo or get_settings().github_repo or ""
+    cache_key = f"onboard-start:{repo}:{module}:{topic}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.info("Onboard start cache hit: module=%s topic=%s", module, topic)
+        return cached
+
+    ab = get_agent_builder()
+    result = await ab.converse(message=_start_prompt(module, topic))
+    cache.put(cache_key, result)
+    return result
+
+
 @router.post("/start")
 async def start_onboarding(module: str = "", topic: str = "architecture"):
     """Start an onboarding learning path for a module or the whole codebase."""
-    ab = get_agent_builder()
-
     try:
-        result = await ab.converse(message=_start_prompt(module, topic))
+        result = await _start_cached(module, topic)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Agent Builder error: {str(e)}")
 
@@ -129,10 +143,8 @@ async def start_onboarding_stream(module: str = "", topic: str = "architecture")
     async def event_generator():
         yield sse_event("status", {"phase": "thinking", "message": "Preparing your learning path..."})
 
-        ab = get_agent_builder()
-
         try:
-            result = await ab.converse(message=_start_prompt(module, topic))
+            result = await _start_cached(module, topic)
         except Exception as e:
             logger.error("Agent Builder error during onboard start stream: %s", e, exc_info=True)
             yield sse_error(f"Agent Builder error: {e}", 502)

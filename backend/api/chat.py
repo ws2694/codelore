@@ -10,6 +10,7 @@ from backend.models.schemas import ChatRequest, ChatResponse
 from backend.services.agent_builder import get_agent_builder
 from backend.services.auth_store import get_auth_state
 from backend.services.sse_helpers import stream_response, sse_event, sse_error
+from backend.services import cache
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +49,36 @@ def _parse_sources(result: dict) -> list[dict]:
     return sources
 
 
+async def _converse_cached(request: ChatRequest) -> dict:
+    """Call Agent Builder with caching. Skip cache for ongoing conversations."""
+    repo = get_auth_state().selected_repo or get_settings().github_repo or ""
+
+    # Only cache first-turn questions (no conversation_id = fresh question)
+    cache_key = None
+    if not request.conversation_id:
+        cache_key = f"chat:{repo}:{request.mode}:{request.question}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info("Chat cache hit: %s", request.question[:50])
+            return cached
+
+    ab = get_agent_builder()
+    result = await ab.converse(
+        message=_prepare_message(request),
+        conversation_id=request.conversation_id,
+    )
+
+    if cache_key:
+        cache.put(cache_key, result)
+
+    return result
+
+
 @router.post("/ask", response_model=ChatResponse)
 async def ask(request: ChatRequest):
     """Send a question to CodeLore agent and get a sourced answer."""
-    ab = get_agent_builder()
-
     try:
-        result = await ab.converse(
-            message=_prepare_message(request),
-            conversation_id=request.conversation_id,
-        )
+        result = await _converse_cached(request)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Agent Builder error: {str(e)}")
 
@@ -78,13 +99,8 @@ async def ask_stream(request: ChatRequest):
     async def event_generator():
         yield sse_event("status", {"phase": "thinking", "message": "Searching codebase memory..."})
 
-        ab = get_agent_builder()
-
         try:
-            result = await ab.converse(
-                message=_prepare_message(request),
-                conversation_id=request.conversation_id,
-            )
+            result = await _converse_cached(request)
         except Exception as e:
             logger.error("Agent Builder error during chat stream: %s", e, exc_info=True)
             yield sse_error(f"Agent Builder error: {e}", 502)
