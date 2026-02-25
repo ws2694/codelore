@@ -5,8 +5,10 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from backend.config import get_settings
 from backend.models.schemas import ChatRequest, ChatResponse
 from backend.services.agent_builder import get_agent_builder
+from backend.services.auth_store import get_auth_state
 from backend.services.sse_helpers import stream_response, sse_event, sse_error
 
 logger = logging.getLogger(__name__)
@@ -14,12 +16,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
+def _get_repo_context() -> str:
+    """Return a repo-scoping prefix for agent messages."""
+    repo = get_auth_state().selected_repo or get_settings().github_repo
+    if repo:
+        return f"[REPO: {repo}] IMPORTANT: Only query data where repo == \"{repo}\". "
+    return ""
+
+
 def _prepare_message(request: ChatRequest) -> str:
+    repo_ctx = _get_repo_context()
     message = request.question
     if request.mode == "onboard":
-        message = f"[ONBOARD MODE] {message}"
+        message = f"{repo_ctx}[ONBOARD MODE] {message}"
     elif request.mode == "explore":
-        message = f"[EXPLORE MODE] {message}"
+        message = f"{repo_ctx}[EXPLORE MODE] {message}"
+    else:
+        message = f"{repo_ctx}{message}"
     return message
 
 

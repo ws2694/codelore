@@ -5,7 +5,9 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from backend.config import get_settings
 from backend.services.agent_builder import get_agent_builder
+from backend.services.auth_store import get_auth_state
 from backend.services.sse_helpers import stream_response, sse_event, sse_error
 
 logger = logging.getLogger(__name__)
@@ -13,16 +15,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/onboard", tags=["onboard"])
 
 
+def _get_repo_context() -> str:
+    """Return a repo-scoping prefix for agent messages."""
+    repo = get_auth_state().selected_repo or get_settings().github_repo
+    if repo:
+        return f"[REPO: {repo}] IMPORTANT: Only query data where repo == \"{repo}\". "
+    return ""
+
+
 def _start_prompt(module: str, topic: str) -> str:
+    repo_ctx = _get_repo_context()
     if module:
         return (
-            f"[ONBOARD MODE] Generate step 1 of a learning path for the '{module}' module. "
+            f"{repo_ctx}[ONBOARD MODE] Generate step 1 of a learning path for the '{module}' module. "
             f"Start with the most important architectural decision, explain why it was made, "
             f"list the key files involved, and cite your sources. "
             f"At the end, tell me how many total steps there will be."
         )
     return (
-        f"[ONBOARD MODE] Generate step 1 of a learning path for this codebase. "
+        f"{repo_ctx}[ONBOARD MODE] Generate step 1 of a learning path for this codebase. "
         f"Topic: {topic}. Start with a high-level overview of the architecture, "
         f"the most important design decisions, and the key modules. "
         f"Cite your sources. At the end, tell me how many total steps there will be."
@@ -30,16 +41,18 @@ def _start_prompt(module: str, topic: str) -> str:
 
 
 def _next_prompt(current_step: int) -> str:
+    repo_ctx = _get_repo_context()
     return (
-        f"[ONBOARD MODE] Continue to step {current_step + 1} of the learning path. "
+        f"{repo_ctx}[ONBOARD MODE] Continue to step {current_step + 1} of the learning path. "
         f"Explain the next most important concept, decision, or module. "
         f"Include key files, rationale, and sources. Keep your response concise."
     )
 
 
 def _fallback_prompt(current_step: int) -> str:
+    repo_ctx = _get_repo_context()
     return (
-        f"[ONBOARD MODE] Generate step {current_step + 1} of a codebase learning path. "
+        f"{repo_ctx}[ONBOARD MODE] Generate step {current_step + 1} of a codebase learning path. "
         f"The previous {current_step} steps already covered the basics. "
         f"Now explain the next most important concept, decision, or module "
         f"that hasn't been covered yet. Include key files, rationale, and sources. "
