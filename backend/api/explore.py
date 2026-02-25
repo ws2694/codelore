@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.config import settings
+from backend.config import get_settings
 from backend.services.auth_store import get_auth_state
 from backend.services.elasticsearch_client import get_es_client
 from backend.services.embedding_service import embed_text
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/explore", tags=["explore"])
 
 def _current_repo() -> str:
     """Return the currently selected repo or raise 400."""
-    repo = get_auth_state().selected_repo or settings.github_repo
+    repo = get_auth_state().selected_repo or get_settings().github_repo
     if not repo:
         raise HTTPException(status_code=400, detail="No repo selected. Connect a GitHub repo first.")
     return repo
