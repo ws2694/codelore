@@ -66,7 +66,7 @@ Select a topic (architecture, auth, payments, recent changes) and the agent gene
 - **Impact Analysis**: Risk dashboard for any file — bus factor, change frequency, co-change coupling ratios, and a computed risk level (low/medium/high).
 
 ### GitHub Ingestion Pipeline
-One-click ingestion from any GitHub repo via OAuth. Fetches commits (with diffs), PRs (with reviews and comments), and architecture docs. All text is embedded with Sentence Transformers for semantic search. Automatic cleanup of old data on re-ingestion prevents duplicates.
+One-click ingestion from any GitHub repo via OAuth. Fetches commits (with diffs), PRs (with reviews and comments), and architecture docs. All text is embedded with Sentence Transformers for semantic search. Automatic `delete_by_query` cleanup on re-ingestion prevents duplicates. Merge-commit deduplication ensures PR-based decisions aren't duplicated by the commit pass.
 
 ### Multi-Repo Support
 Connect any GitHub repo via OAuth, switch between repos, and each repo's data is cleanly isolated with repo-scoped document IDs and per-query filtering.
@@ -246,6 +246,7 @@ New developers waste weeks understanding why code exists. Critical design contex
 - **Token limits**: Multi-turn onboarding conversations can exceed the LLM's context window by turn 3, solved with a graceful fallback to fresh conversations.
 - **Cross-repo data leakage**: In-memory auth state lost on server restart caused wrong-repo results. Solved by passing `selected_repo` from frontend with every API call.
 - **Query performance**: Sequential per-index kNN queries took minutes. Solved with multi-index queries, msearch batching, int8_hnsw quantization, force merge, and multi-layer caching (embedding LRU + response TTL + Agent Builder result cache).
+- **Document cleanup on serverless**: `delete_by_query` with `term` silently matched 0 docs when the index had dynamic text mapping instead of explicit keyword mapping. Solved with `bool/should` matching on both `repo` and `repo.keyword`. Also deduplicated PR merge commits from the decision synthesis pass.
 
 ### What We Liked
 - The **ES|QL tool type** made it trivial to create parameterized search tools without custom code.
