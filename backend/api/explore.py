@@ -1,5 +1,7 @@
 """Explore API — timeline, decision, semantic, expert, and impact queries."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.config import get_settings
@@ -8,20 +10,21 @@ from backend.services.elasticsearch_client import get_es_client
 from backend.services.embedding_service import embed_text
 from backend.models.schemas import SemanticSearchRequest, TimelineEntry
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/explore", tags=["explore"])
 
 
-def _current_repo() -> str:
-    """Return the currently selected repo or raise 400."""
-    repo = get_auth_state().selected_repo or get_settings().github_repo
+def _resolve_repo(repo_override: str | None = None) -> str:
+    """Return the repo to filter on, preferring an explicit override."""
+    repo = repo_override or get_auth_state().selected_repo or get_settings().github_repo
     if not repo:
         raise HTTPException(status_code=400, detail="No repo selected. Connect a GitHub repo first.")
     return repo
 
 
-def _repo_filter() -> dict:
-    """Return an ES term filter for the current repo."""
-    return {"term": {"repo": _current_repo()}}
+def _repo_filter(repo: str) -> dict:
+    """Return an ES term filter for the given repo."""
+    return {"term": {"repo": repo}}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -134,33 +137,73 @@ def _calculate_risk(bus_factor: int, total_commits: int, co_change_count: int) -
 
 
 @router.get("/timeline/{filepath:path}")
-async def get_file_timeline(filepath: str):
+async def get_file_timeline(
+    filepath: str,
+    repo: str = Query(default=None, description="Override repo for filtering"),
+):
     """Get chronological history of a file across commits and PR events."""
     es = get_es_client()
+    current_repo = _resolve_repo(repo)
+    rf = _repo_filter(current_repo)
+    logger.info("Timeline query: filepath=%s repo=%s", filepath, current_repo)
+
+    # Use msearch for parallel execution of all 3 queries in one round-trip
+    searches = []
+    # 1. Commits
+    searches.append({"index": "codelore-commits"})
+    searches.append({
+        "query": {
+            "bool": {
+                "filter": [rf],
+                "should": [
+                    {"wildcard": {"files_changed": f"*{filepath}*"}},
+                    {"match": {"files_changed": filepath}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
+        "sort": [{"date": {"order": "desc"}}],
+        "size": 50,
+    })
+    # 2. PR events
+    searches.append({"index": "codelore-pr-events"})
+    searches.append({
+        "query": {
+            "bool": {
+                "filter": [rf],
+                "should": [
+                    {"wildcard": {"files_changed": f"*{filepath}*"}},
+                    {"match": {"body": filepath}},
+                    {"match": {"comment_body": filepath}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
+        "sort": [{"created_at": {"order": "desc"}}],
+        "size": 30,
+    })
+    # 3. Decisions
+    searches.append({"index": "codelore-decisions"})
+    searches.append({
+        "query": {
+            "bool": {
+                "filter": [rf],
+                "should": [
+                    {"wildcard": {"affected_files": f"*{filepath}*"}},
+                    {"match": {"affected_files": filepath}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
+        "sort": [{"decided_at": {"order": "desc"}}],
+        "size": 10,
+    })
+
+    results = es.msearch(body=searches)
     entries = []
 
-    repo_filter = _repo_filter()
-
-    # Search commits that touched this file
-    commits_result = es.search(
-        index="codelore-commits",
-        body={
-            "query": {
-                "bool": {
-                    "filter": [repo_filter],
-                    "should": [
-                        {"wildcard": {"files_changed": f"*{filepath}*"}},
-                        {"match": {"files_changed": filepath}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            },
-            "sort": [{"date": {"order": "desc"}}],
-            "size": 50,
-        },
-    )
-
-    for hit in commits_result["hits"]["hits"]:
+    # Parse commits
+    for hit in results["responses"][0].get("hits", {}).get("hits", []):
         src = hit["_source"]
         entries.append({
             "date": src.get("date", ""),
@@ -173,27 +216,8 @@ async def get_file_timeline(filepath: str):
             "pr_number": src.get("pr_number"),
         })
 
-    # Search PR events mentioning this file
-    pr_result = es.search(
-        index="codelore-pr-events",
-        body={
-            "query": {
-                "bool": {
-                    "filter": [repo_filter],
-                    "should": [
-                        {"wildcard": {"files_changed": f"*{filepath}*"}},
-                        {"match": {"body": filepath}},
-                        {"match": {"comment_body": filepath}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            },
-            "sort": [{"created_at": {"order": "desc"}}],
-            "size": 30,
-        },
-    )
-
-    for hit in pr_result["hits"]["hits"]:
+    # Parse PR events
+    for hit in results["responses"][1].get("hits", {}).get("hits", []):
         src = hit["_source"]
         entries.append({
             "date": src.get("created_at", src.get("comment_date", "")),
@@ -205,26 +229,8 @@ async def get_file_timeline(filepath: str):
             "files": src.get("files_changed", []),
         })
 
-    # Search decisions affecting this file
-    decisions_result = es.search(
-        index="codelore-decisions",
-        body={
-            "query": {
-                "bool": {
-                    "filter": [repo_filter],
-                    "should": [
-                        {"wildcard": {"affected_files": f"*{filepath}*"}},
-                        {"match": {"affected_files": filepath}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            },
-            "sort": [{"decided_at": {"order": "desc"}}],
-            "size": 10,
-        },
-    )
-
-    for hit in decisions_result["hits"]["hits"]:
+    # Parse decisions
+    for hit in results["responses"][2].get("hits", {}).get("hits", []):
         src = hit["_source"]
         entries.append({
             "date": src.get("decided_at", ""),
@@ -235,9 +241,7 @@ async def get_file_timeline(filepath: str):
             "files": src.get("affected_files", []),
         })
 
-    # Sort all entries by date descending
     entries.sort(key=lambda e: e.get("date", ""), reverse=True)
-
     return {"filepath": filepath, "entries": entries, "total": len(entries)}
 
 
@@ -245,16 +249,18 @@ async def get_file_timeline(filepath: str):
 async def get_decisions(
     query: str = Query(default=None, description="Optional search filter"),
     limit: int = Query(default=20, le=100),
+    repo: str = Query(default=None, description="Override repo for filtering"),
 ):
     """Get synthesized decisions, optionally filtered by query."""
     es = get_es_client()
-    repo_filter = _repo_filter()
+    current_repo = _resolve_repo(repo)
+    rf = _repo_filter(current_repo)
 
     if query:
         body = {
             "query": {
                 "bool": {
-                    "filter": [repo_filter],
+                    "filter": [rf],
                     "must": [
                         {
                             "multi_match": {
@@ -270,7 +276,7 @@ async def get_decisions(
         }
     else:
         body = {
-            "query": {"bool": {"filter": [repo_filter]}},
+            "query": {"bool": {"filter": [rf]}},
             "sort": [{"importance": {"order": "desc"}}],
             "size": limit,
         }
@@ -290,8 +296,9 @@ async def semantic_search(req: SemanticSearchRequest):
     """Search across all indices using kNN vector similarity."""
     es = get_es_client()
     query_vector = embed_text(req.query)
-    repo_filter = _repo_filter()
-    current_repo = _current_repo()
+    current_repo = _resolve_repo(req.repo)
+    rf = _repo_filter(current_repo)
+    logger.info("Semantic search: query=%r repo=%s", req.query[:50], current_repo)
 
     target_indices = req.indices or [
         "codelore-commits",
@@ -300,56 +307,65 @@ async def semantic_search(req: SemanticSearchRequest):
         "codelore-decisions",
     ]
 
-    results = []
-    for index in target_indices:
-        try:
-            resp = es.search(
-                index=index,
-                body={
-                    "knn": {
-                        "field": "embedding",
-                        "query_vector": query_vector,
-                        "k": min(req.limit, 10),
-                        "num_candidates": 100,
-                        "filter": repo_filter,
-                    },
-                    "post_filter": repo_filter,
-                    "size": min(req.limit, 10),
-                    "_source": {"excludes": ["embedding"]},
+    # Single multi-index kNN query instead of 4 sequential per-index queries
+    index_pattern = ",".join(target_indices)
+    try:
+        resp = es.search(
+            index=index_pattern,
+            body={
+                "knn": {
+                    "field": "embedding",
+                    "query_vector": query_vector,
+                    "k": min(req.limit, 20),
+                    "num_candidates": 100,
+                    "filter": rf,
                 },
-            )
-            for hit in resp["hits"]["hits"]:
-                src = hit["_source"]
-                # Skip results from wrong repo (safety net)
-                if src.get("repo") and src["repo"] != current_repo:
-                    continue
-                results.append({
-                    "index": index.replace("codelore-", ""),
-                    "score": round(hit["_score"], 4),
-                    "title": _extract_title(index, src),
-                    "summary": _extract_summary(index, src),
-                    "author": _extract_author(index, src),
-                    "date": _extract_date(index, src),
-                    "metadata": src,
-                })
-        except Exception:
-            continue
+                "post_filter": rf,
+                "size": req.limit,
+                "_source": {"excludes": ["embedding"]},
+            },
+        )
+    except Exception as e:
+        logger.error("Semantic search failed: %s", e)
+        return {"query": req.query, "results": []}
 
-    results.sort(key=lambda r: r["score"], reverse=True)
-    return {"query": req.query, "results": results[: req.limit]}
+    results = []
+    for hit in resp["hits"]["hits"]:
+        src = hit["_source"]
+        index = hit["_index"]
+        # Safety net: skip wrong repo
+        if src.get("repo") and src["repo"] != current_repo:
+            continue
+        results.append({
+            "index": index.replace("codelore-", ""),
+            "score": round(hit["_score"], 4),
+            "title": _extract_title(index, src),
+            "summary": _extract_summary(index, src),
+            "author": _extract_author(index, src),
+            "date": _extract_date(index, src),
+            "metadata": src,
+        })
+
+    return {"query": req.query, "results": results}
 
 
 @router.get("/experts/{module}")
-async def get_module_experts(module: str, limit: int = 5):
+async def get_module_experts(
+    module: str,
+    limit: int = 5,
+    repo: str = Query(default=None, description="Override repo for filtering"),
+):
     """Find the top contributors for a given module/file path."""
     es = get_es_client()
+    current_repo = _resolve_repo(repo)
+    rf = _repo_filter(current_repo)
 
     result = es.search(
         index="codelore-commits",
         body={
             "query": {
                 "bool": {
-                    "filter": [_repo_filter()],
+                    "filter": [rf],
                     "must": [{"wildcard": {"files_changed": f"*{module}*"}}],
                 }
             },
@@ -396,16 +412,22 @@ async def get_module_experts(module: str, limit: int = 5):
 
 
 @router.get("/impact/{filepath:path}")
-async def get_file_impact(filepath: str, limit: int = 10):
+async def get_file_impact(
+    filepath: str,
+    limit: int = 10,
+    repo: str = Query(default=None, description="Override repo for filtering"),
+):
     """Analyze change impact, co-change patterns, and risk for a file."""
     es = get_es_client()
+    current_repo = _resolve_repo(repo)
+    rf = _repo_filter(current_repo)
 
     result = es.search(
         index="codelore-commits",
         body={
             "query": {
                 "bool": {
-                    "filter": [_repo_filter()],
+                    "filter": [rf],
                     "should": [
                         {"wildcard": {"files_changed": f"*{filepath}*"}},
                         {"term": {"files_changed": filepath}},
@@ -445,7 +467,6 @@ async def get_file_impact(filepath: str, limit: int = 10):
     aggs = result["aggregations"]
     total_commits = result["hits"]["total"]["value"]
 
-    # Build co-change list, filtering out the queried file
     co_changes = []
     for bucket in aggs["co_changed_files"]["buckets"]:
         fp = bucket["key"]
@@ -458,7 +479,6 @@ async def get_file_impact(filepath: str, limit: int = 10):
         })
     co_changes = co_changes[:limit]
 
-    # Build experts list
     experts = []
     for bucket in aggs["top_authors"]["buckets"]:
         experts.append({
@@ -500,14 +520,19 @@ async def get_file_impact(filepath: str, limit: int = 10):
 
 
 @router.get("/popular-files")
-async def get_popular_files(limit: int = Query(default=8, le=30)):
+async def get_popular_files(
+    limit: int = Query(default=8, le=30),
+    repo: str = Query(default=None, description="Override repo for filtering"),
+):
     """Get the most frequently changed files across all commits."""
     es = get_es_client()
+    current_repo = _resolve_repo(repo)
+    rf = _repo_filter(current_repo)
 
     result = es.search(
         index="codelore-commits",
         body={
-            "query": {"bool": {"filter": [_repo_filter()]}},
+            "query": {"bool": {"filter": [rf]}},
             "aggs": {
                 "top_files": {
                     "terms": {"field": "files_changed", "size": limit * 3},
@@ -520,7 +545,6 @@ async def get_popular_files(limit: int = Query(default=8, le=30)):
     files = []
     for bucket in result["aggregations"]["top_files"]["buckets"]:
         filepath = bucket["key"]
-        # Skip lockfiles and generated files
         if any(skip in filepath.lower() for skip in [
             "package-lock", "yarn.lock", ".lock", ".min.", ".map",
         ]):

@@ -48,6 +48,7 @@ class OnboardStep(BaseModel):
 
 class SemanticSearchRequest(BaseModel):
     query: str
+    repo: str | None = None
     indices: list[str] | None = None
     limit: int = 20
 

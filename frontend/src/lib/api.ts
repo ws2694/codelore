@@ -3,6 +3,11 @@ import type { HealthStatus, TimelineEntry, Decision, Expert, ExpertFinderResult,
 
 const api = axios.create({ baseURL: '/api' });
 
+// Selected repo — set by the app on auth load so every explore call filters correctly.
+let _selectedRepo: string | null = null;
+export function setSelectedRepo(repo: string | null) { _selectedRepo = repo; }
+export function getSelectedRepo() { return _selectedRepo; }
+
 export const chatApi = {
   ask: async (question: string, conversationId?: string, mode = 'ask') => {
     const { data } = await api.post('/chat/ask', {
@@ -20,32 +25,40 @@ export const chatApi = {
 
 export const exploreApi = {
   getTimeline: async (filepath: string) => {
-    const { data } = await api.get(`/explore/timeline/${encodeURIComponent(filepath)}`);
+    const { data } = await api.get(`/explore/timeline/${encodeURIComponent(filepath)}`, {
+      params: { repo: _selectedRepo },
+    });
     return data as { filepath: string; entries: TimelineEntry[]; total: number };
   },
 
   getDecisions: async (query?: string) => {
-    const { data } = await api.get('/explore/decisions', { params: { query } });
+    const { data } = await api.get('/explore/decisions', { params: { query, repo: _selectedRepo } });
     return data as { decisions: Decision[]; total: number };
   },
 
   getExperts: async (module: string, limit = 5) => {
-    const { data } = await api.get(`/explore/experts/${encodeURIComponent(module)}`, { params: { limit } });
+    const { data } = await api.get(`/explore/experts/${encodeURIComponent(module)}`, {
+      params: { limit, repo: _selectedRepo },
+    });
     return data as ExpertFinderResult;
   },
 
   getPopularFiles: async (limit = 8) => {
-    const { data } = await api.get('/explore/popular-files', { params: { limit } });
+    const { data } = await api.get('/explore/popular-files', { params: { limit, repo: _selectedRepo } });
     return data as { files: { path: string; commits: number }[] };
   },
 
   semanticSearch: async (query: string, indices?: string[], limit = 20) => {
-    const { data } = await api.post('/explore/semantic-search', { query, indices, limit });
+    const { data } = await api.post('/explore/semantic-search', {
+      query, indices, limit, repo: _selectedRepo,
+    });
     return data as { query: string; results: SemanticSearchResult[] };
   },
 
   getImpact: async (filepath: string) => {
-    const { data } = await api.get(`/explore/impact/${encodeURIComponent(filepath)}`);
+    const { data } = await api.get(`/explore/impact/${encodeURIComponent(filepath)}`, {
+      params: { repo: _selectedRepo },
+    });
     return data as ImpactAnalysis;
   },
 };

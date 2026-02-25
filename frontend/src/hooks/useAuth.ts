@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { authApi } from '../lib/api';
+import { authApi, setSelectedRepo } from '../lib/api';
 import type { AuthStatus } from '../lib/types';
 
 interface AuthContextValue {
@@ -25,6 +25,7 @@ export function useAuthProvider() {
     try {
       const status = await authApi.status();
       setAuth(status);
+      setSelectedRepo(status.selected_repo);
     } catch {
       setAuth({
         authenticated: false,
@@ -34,6 +35,7 @@ export function useAuthProvider() {
         selected_repo: null,
         oauth_configured: false,
       });
+      setSelectedRepo(null);
     } finally {
       setIsLoading(false);
     }
