@@ -71,6 +71,12 @@ One-click ingestion from any GitHub repo via OAuth. Fetches commits (with diffs)
 ### Multi-Repo Support
 Connect any GitHub repo via OAuth, switch between repos, and each repo's data is cleanly isolated with repo-scoped document IDs and per-query filtering.
 
+### Performance — Multi-Layer Caching
+- **Embedding cache**: LRU cache (256 entries) on `embed_text()` avoids re-running sentence-transformer inference for repeated queries
+- **Explore cache**: In-memory TTL cache (10 min) on all 6 explore endpoints — timeline, decisions, experts, impact, semantic search
+- **Agent Builder cache**: First-turn chat and onboard-start responses are cached so identical questions skip the Agent Builder round-trip entirely
+- **Cache invalidation**: All caches are cleared automatically on data ingestion or repo deletion
+
 ## Agent Builder Integration
 
 ### Agent: `codelore-agent`
@@ -184,7 +190,8 @@ codelore/
 │   ├── services/
 │   │   ├── agent_builder.py  # Kibana Agent Builder API client
 │   │   ├── elasticsearch_client.py
-│   │   ├── embedding_service.py    # Sentence Transformers
+│   │   ├── embedding_service.py    # Sentence Transformers + LRU cache
+│   │   ├── cache.py                # In-memory TTL cache
 │   │   └── github_ingester.py      # GitHub data pipeline
 │   ├── scripts/
 │   │   ├── setup_indices.py  # Create ES indices
@@ -225,6 +232,7 @@ New developers waste weeks understanding why code exists. Critical design contex
 - **delete_by_query** — clean repo data isolation, no stale cross-repo results
 - **Force merge** — post-ingestion optimization to 1 segment for maximum search performance
 - **`_source` excludes** — embedding vectors excluded at mapping level to reduce network overhead
+- **`preference="_local"`** — shard-level query routing for better cache hits
 
 ### Agent Builder Features Used
 - 6 custom ES|QL tools with parameterized `match()` queries for full-text search
@@ -238,7 +246,7 @@ New developers waste weeks understanding why code exists. Critical design contex
 - **Response parsing**: The Agent Builder API nests the answer under `response.message` rather than at the top level, requiring careful response exploration.
 - **Token limits**: Multi-turn onboarding conversations can exceed the LLM's context window by turn 3, solved with a graceful fallback to fresh conversations.
 - **Cross-repo data leakage**: In-memory auth state lost on server restart caused wrong-repo results. Solved by passing `selected_repo` from frontend with every API call.
-- **Query performance**: Sequential per-index kNN queries took minutes. Solved with multi-index queries, msearch batching, int8_hnsw quantization, and force merge.
+- **Query performance**: Sequential per-index kNN queries took minutes. Solved with multi-index queries, msearch batching, int8_hnsw quantization, force merge, and multi-layer caching (embedding LRU + response TTL + Agent Builder result cache).
 
 ### What We Liked
 - The **ES|QL tool type** made it trivial to create parameterized search tools without custom code.
