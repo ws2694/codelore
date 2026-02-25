@@ -232,7 +232,6 @@ New developers waste weeks understanding why code exists. Critical design contex
 - **delete_by_query** — clean repo data isolation, no stale cross-repo results
 - **Force merge** — post-ingestion optimization to 1 segment for maximum search performance
 - **`_source` excludes** — embedding vectors excluded at mapping level to reduce network overhead
-- **`preference="_local"`** — shard-level query routing for better cache hits
 
 ### Agent Builder Features Used
 - 6 custom ES|QL tools with parameterized `match()` queries for full-text search

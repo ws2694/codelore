@@ -206,7 +206,7 @@ async def get_file_timeline(
         "size": 10,
     })
 
-    results = es.msearch(body=searches, preference="_local")
+    results = es.msearch(body=searches)
     entries = []
 
     # Parse commits
@@ -296,7 +296,7 @@ async def get_decisions(
         }
 
     body["_source"] = {"excludes": ["embedding"]}
-    result = es.search(index="codelore-decisions", body=body, preference="_local")
+    result = es.search(index="codelore-decisions", body=body)
     decisions = []
     for hit in result["hits"]["hits"]:
         decisions.append(hit["_source"])
@@ -344,7 +344,6 @@ async def semantic_search(req: SemanticSearchRequest):
                 "size": req.limit,
                 "_source": {"excludes": ["embedding"]},
             },
-            preference="_local",
         )
     except Exception as e:
         logger.error("Semantic search failed: %s", e)
@@ -415,7 +414,6 @@ async def get_module_experts(
             },
             "size": 0,
         },
-        preference="_local",
     )
 
     aggs = result["aggregations"]
@@ -498,7 +496,6 @@ async def get_file_impact(
             },
             "size": 0,
         },
-        preference="_local",
     )
 
     aggs = result["aggregations"]
@@ -584,7 +581,6 @@ async def get_popular_files(
             },
             "size": 0,
         },
-        preference="_local",
     )
 
     files = []
