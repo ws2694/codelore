@@ -291,6 +291,7 @@ async def semantic_search(req: SemanticSearchRequest):
     es = get_es_client()
     query_vector = embed_text(req.query)
     repo_filter = _repo_filter()
+    current_repo = _current_repo()
 
     target_indices = req.indices or [
         "codelore-commits",
@@ -312,12 +313,16 @@ async def semantic_search(req: SemanticSearchRequest):
                         "num_candidates": 100,
                         "filter": repo_filter,
                     },
+                    "post_filter": repo_filter,
                     "size": min(req.limit, 10),
                     "_source": {"excludes": ["embedding"]},
                 },
             )
             for hit in resp["hits"]["hits"]:
                 src = hit["_source"]
+                # Skip results from wrong repo (safety net)
+                if src.get("repo") and src["repo"] != current_repo:
+                    continue
                 results.append({
                     "index": index.replace("codelore-", ""),
                     "score": round(hit["_score"], 4),
