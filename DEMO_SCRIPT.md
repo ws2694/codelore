@@ -75,7 +75,7 @@
 
 **[Switch to Impact tab → type `frontend/src/components/explore/ExploreMode.tsx`]**
 
-> "Impact Analysis is the risk dashboard. `ExploreMode.tsx` was modified and co-changes with these files. The coupling ratio shows these files are tightly coupled. The change frequency chart shows all the activity concentrated in one day"
+> "Impact Analysis is the risk dashboard. `ExploreMode.tsx` was modified and co-changes with these files. The coupling ratio shows these files are tightly coupled."
 
 **[Point to the risk banner and co-change bars]**
 

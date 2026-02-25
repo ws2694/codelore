@@ -11,11 +11,38 @@ from backend.services.elasticsearch_client import get_es_client
 from backend.services.embedding_service import embed_text, embed_batch
 
 
+ALL_INDICES = [
+    "codelore-commits",
+    "codelore-pr-events",
+    "codelore-docs",
+    "codelore-decisions",
+    "codelore-slack",
+]
+
+
+def delete_repo_data(repo: str) -> dict[str, int]:
+    """Delete all documents for a given repo across all indices."""
+    es = get_es_client()
+    deleted = {}
+    for index in ALL_INDICES:
+        if not es.indices.exists(index=index):
+            continue
+        resp = es.delete_by_query(
+            index=index,
+            body={"query": {"term": {"repo": repo}}},
+            refresh=True,
+        )
+        deleted[index] = resp.get("deleted", 0)
+    return deleted
+
+
 class GitHubIngester:
     def __init__(self, token: str | None = None, repo: str | None = None):
         settings = get_settings()
         self.token = token or settings.github_token
         self.repo = repo or settings.github_repo
+        # Short repo prefix for document IDs to avoid cross-repo collisions
+        self._repo_prefix = hashlib.md5(self.repo.encode()).hexdigest()[:6]
         self.headers = {
             "Authorization": f"token {self.token}",
             "Accept": "application/vnd.github.v3+json",
@@ -24,8 +51,18 @@ class GitHubIngester:
         self.es = get_es_client()
         self.stats = {"commits": 0, "prs": 0, "pr_events": 0, "docs": 0, "decisions": 0}
 
+    def _doc_id(self, *parts: str) -> str:
+        """Build a repo-scoped document ID."""
+        return f"{self._repo_prefix}-{'-'.join(parts)}"
+
     async def ingest_all(self) -> dict:
-        """Run full ingestion pipeline."""
+        """Run full ingestion pipeline. Cleans old data for this repo first."""
+        # Delete existing data for this repo to avoid stale/duplicate documents
+        deleted = delete_repo_data(self.repo)
+        total_deleted = sum(deleted.values())
+        if total_deleted:
+            print(f"Cleaned {total_deleted} old documents for {self.repo}")
+
         async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
             self.client = client
             await self.ingest_commits()
@@ -88,7 +125,7 @@ class GitHubIngester:
 
                 doc = {
                     "_index": "codelore-commits",
-                    "_id": sha[:12],
+                    "_id": self._doc_id("c", sha[:12]),
                     "sha": sha,
                     "message": message,
                     "author": (commit.get("author") or {}).get("login", "unknown"),
@@ -138,7 +175,7 @@ class GitHubIngester:
                 pr_text = f"{pr.get('title', '')}\n{pr.get('body', '') or ''}"
                 actions.append({
                     "_index": "codelore-pr-events",
-                    "_id": f"pr-{pr_num}-opened",
+                    "_id": self._doc_id("pr", str(pr_num), "opened"),
                     "pr_number": pr_num,
                     "title": pr.get("title", ""),
                     "body": pr.get("body", "") or "",
@@ -165,7 +202,7 @@ class GitHubIngester:
                             continue
                         actions.append({
                             "_index": "codelore-pr-events",
-                            "_id": f"pr-{pr_num}-review-{review['id']}",
+                            "_id": self._doc_id("pr", str(pr_num), "review", str(review['id'])),
                             "pr_number": pr_num,
                             "title": pr.get("title", ""),
                             "author": (pr.get("user") or {}).get("login", "unknown"),
@@ -191,7 +228,7 @@ class GitHubIngester:
                             continue
                         actions.append({
                             "_index": "codelore-pr-events",
-                            "_id": f"pr-{pr_num}-comment-{comment['id']}",
+                            "_id": self._doc_id("pr", str(pr_num), "comment", str(comment['id'])),
                             "pr_number": pr_num,
                             "title": pr.get("title", ""),
                             "author": (pr.get("user") or {}).get("login", "unknown"),
@@ -286,11 +323,12 @@ class GitHubIngester:
         for i, section in enumerate(sections):
             if len(section.strip()) < 20:
                 continue
-            doc_id = hashlib.md5(f"{path}:{i}".encode()).hexdigest()[:12]
+            content_hash = hashlib.md5(f"{path}:{i}".encode()).hexdigest()[:12]
+            doc_id = self._doc_id("doc", content_hash)
             actions.append({
                 "_index": "codelore-docs",
                 "_id": doc_id,
-                "doc_id": doc_id,
+                "doc_id": content_hash,
                 "path": path,
                 "filename": filename,
                 "doc_type": doc_type,
@@ -367,7 +405,7 @@ class GitHubIngester:
 
                 actions.append({
                     "_index": "codelore-decisions",
-                    "_id": f"pr-{pr_num}",
+                    "_id": self._doc_id("dec-pr", str(pr_num)),
                     "decision_id": f"pr-{pr_num}",
                     "title": title,
                     "summary": summary,
@@ -467,7 +505,7 @@ class GitHubIngester:
 
                 actions.append({
                     "_index": "codelore-decisions",
-                    "_id": f"commit-{sha[:12]}",
+                    "_id": self._doc_id("dec-c", sha[:12]),
                     "decision_id": f"commit-{sha[:12]}",
                     "title": title_line,
                     "summary": summary,

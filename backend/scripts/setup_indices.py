@@ -7,9 +7,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from backend.services.elasticsearch_client import get_es_client
 
+# Shared embedding field config: int8_hnsw quantization for ~4x memory savings
+_EMBEDDING_FIELD = {
+    "type": "dense_vector",
+    "dims": 384,
+    "index": True,
+    "similarity": "cosine",
+    "index_options": {"type": "int8_hnsw"},
+}
+
 INDICES = {
     "codelore-commits": {
         "mappings": {
+            "_source": {"excludes": ["embedding"]},
             "properties": {
                 "sha": {"type": "keyword"},
                 "message": {"type": "text", "analyzer": "standard"},
@@ -25,17 +35,13 @@ INDICES = {
                 "branch": {"type": "keyword"},
                 "pr_number": {"type": "integer"},
                 "impact_score": {"type": "float"},
-                "embedding": {
-                    "type": "dense_vector",
-                    "dims": 384,
-                    "index": True,
-                    "similarity": "cosine",
-                },
-            }
+                "embedding": _EMBEDDING_FIELD,
+            },
         },
     },
     "codelore-pr-events": {
         "mappings": {
+            "_source": {"excludes": ["embedding"]},
             "properties": {
                 "pr_number": {"type": "integer"},
                 "title": {"type": "text"},
@@ -56,17 +62,13 @@ INDICES = {
                 "repo": {"type": "keyword"},
                 "decision_extracted": {"type": "text"},
                 "decision_confidence": {"type": "float"},
-                "embedding": {
-                    "type": "dense_vector",
-                    "dims": 384,
-                    "index": True,
-                    "similarity": "cosine",
-                },
-            }
+                "embedding": _EMBEDDING_FIELD,
+            },
         },
     },
     "codelore-docs": {
         "mappings": {
+            "_source": {"excludes": ["embedding"]},
             "properties": {
                 "doc_id": {"type": "keyword"},
                 "path": {"type": "keyword"},
@@ -79,17 +81,13 @@ INDICES = {
                 "last_author": {"type": "keyword"},
                 "repo": {"type": "keyword"},
                 "version": {"type": "integer"},
-                "embedding": {
-                    "type": "dense_vector",
-                    "dims": 384,
-                    "index": True,
-                    "similarity": "cosine",
-                },
-            }
+                "embedding": _EMBEDDING_FIELD,
+            },
         },
     },
     "codelore-slack": {
         "mappings": {
+            "_source": {"excludes": ["embedding"]},
             "properties": {
                 "thread_id": {"type": "keyword"},
                 "channel": {"type": "keyword"},
@@ -101,17 +99,13 @@ INDICES = {
                 "linked_commits": {"type": "keyword"},
                 "linked_files": {"type": "keyword"},
                 "repo": {"type": "keyword"},
-                "embedding": {
-                    "type": "dense_vector",
-                    "dims": 384,
-                    "index": True,
-                    "similarity": "cosine",
-                },
-            }
+                "embedding": _EMBEDDING_FIELD,
+            },
         },
     },
     "codelore-decisions": {
         "mappings": {
+            "_source": {"excludes": ["embedding"]},
             "properties": {
                 "decision_id": {"type": "keyword"},
                 "title": {"type": "text"},
@@ -131,13 +125,8 @@ INDICES = {
                 "repo": {"type": "keyword"},
                 "importance": {"type": "float"},
                 "superseded_by": {"type": "keyword"},
-                "embedding": {
-                    "type": "dense_vector",
-                    "dims": 384,
-                    "index": True,
-                    "similarity": "cosine",
-                },
-            }
+                "embedding": _EMBEDDING_FIELD,
+            },
         },
     },
 }
@@ -167,6 +156,43 @@ def setup_indices(force: bool = False):
             print(f"  {index_name}: {count} docs")
 
 
+def optimize_indices():
+    """Post-ingestion optimization: force merge to 1 segment and set refresh interval."""
+    es = get_es_client()
+    print("Optimizing indices...")
+
+    for index_name in INDICES:
+        if not es.indices.exists(index=index_name):
+            print(f"  Skipping {index_name} (does not exist)")
+            continue
+
+        # Set longer refresh interval for production reads
+        es.indices.put_settings(
+            index=index_name,
+            body={"index": {"refresh_interval": "30s"}},
+        )
+
+        # Force merge to 1 segment — maximizes kNN and search performance
+        count = es.count(index=index_name)["count"]
+        if count > 0:
+            print(f"  Force merging {index_name} ({count} docs) to 1 segment...")
+            es.indices.forcemerge(
+                index=index_name,
+                max_num_segments=1,
+                wait_for_completion=True,
+            )
+            print(f"  Done: {index_name}")
+        else:
+            print(f"  Skipping {index_name} (empty)")
+
+    print("Optimization complete.")
+
+
 if __name__ == "__main__":
     force = "--force" in sys.argv
-    setup_indices(force=force)
+    optimize = "--optimize" in sys.argv
+
+    if optimize:
+        optimize_indices()
+    else:
+        setup_indices(force=force)

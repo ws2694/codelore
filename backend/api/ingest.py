@@ -1,10 +1,15 @@
 """Ingest API — trigger data ingestion from GitHub."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from backend.config import get_settings
-from backend.services.github_ingester import GitHubIngester
+from backend.services.github_ingester import GitHubIngester, delete_repo_data
 from backend.services.auth_store import get_auth_state, is_authenticated
+from backend.scripts.setup_indices import optimize_indices
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -44,6 +49,11 @@ async def trigger_ingestion(
             ingester = GitHubIngester(token=token, repo=target_repo)
             stats = await ingester.ingest_all()
             _ingest_status["last_stats"] = stats
+            # Post-ingestion: force merge to 1 segment for faster kNN + search
+            try:
+                optimize_indices()
+            except Exception as e:
+                logger.warning("Post-ingestion optimization failed (non-fatal): %s", e)
         finally:
             _ingest_status["running"] = False
 
@@ -62,4 +72,19 @@ async def get_ingest_status():
     return {
         "running": _ingest_status["running"],
         "last_stats": _ingest_status["last_stats"],
+    }
+
+
+@router.delete("/repo")
+async def delete_repo(repo: str):
+    """Delete all indexed data for a specific repo."""
+    if not repo:
+        raise HTTPException(status_code=400, detail="repo parameter is required")
+    deleted = delete_repo_data(repo)
+    total = sum(deleted.values())
+    return {
+        "status": "deleted",
+        "repo": repo,
+        "deleted_total": total,
+        "deleted_per_index": deleted,
     }

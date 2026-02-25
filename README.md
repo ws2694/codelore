@@ -61,12 +61,15 @@ Select a topic (architecture, auth, payments, recent changes) and the agent gene
 ### Explore Mode — Code Archaeology
 - **File Timeline**: Enter a file path and see every commit, PR discussion, and decision that affected it, sorted chronologically.
 - **Decision Browser**: Browse synthesized architectural decisions with rationale, alternatives considered, importance scores, and affected files.
-
-### Expert Finder
-Identifies domain experts by aggregating commit history per module, showing who has the most context on each part of the codebase.
+- **Semantic Search**: kNN vector search across all indices — find conceptual matches like "why did we choose this pattern" even when no exact keywords match.
+- **Expert Finder**: Identifies domain experts by aggregating commit history per module, with on-call recommendations (60% recency + 40% volume scoring) and bus factor analysis.
+- **Impact Analysis**: Risk dashboard for any file — bus factor, change frequency, co-change coupling ratios, and a computed risk level (low/medium/high).
 
 ### GitHub Ingestion Pipeline
-One-click ingestion from any GitHub repo. Fetches commits (with diffs), PRs (with reviews and comments), and architecture docs. All text is embedded with Sentence Transformers for semantic search.
+One-click ingestion from any GitHub repo via OAuth. Fetches commits (with diffs), PRs (with reviews and comments), and architecture docs. All text is embedded with Sentence Transformers for semantic search. Automatic cleanup of old data on re-ingestion prevents duplicates.
+
+### Multi-Repo Support
+Connect any GitHub repo via OAuth, switch between repos, and each repo's data is cleanly isolated with repo-scoped document IDs and per-query filtering.
 
 ## Agent Builder Integration
 
@@ -101,7 +104,7 @@ The agent also uses `platform.core.search`, `platform.core.generate_esql`, and `
 | `codelore-slack` | Slack threads linked to code | Team discussions |
 | `codelore-decisions` | Synthesized decisions with rationale | Architectural memory |
 
-All indices include 384-dim dense vector fields (cosine similarity) for semantic search.
+All indices include 384-dim dense vector fields with **int8_hnsw quantization** (cosine similarity) for fast, memory-efficient semantic search.
 
 ## Tech Stack
 
@@ -175,8 +178,8 @@ codelore/
 │   ├── api/                  # REST endpoints
 │   │   ├── chat.py           # POST /chat/ask — Q&A via Agent Builder
 │   │   ├── onboard.py        # POST /onboard/start, /onboard/next
-│   │   ├── explore.py        # GET /explore/timeline, /decisions, /experts
-│   │   ├── ingest.py         # POST /ingest/repo, GET /ingest/status
+│   │   ├── explore.py        # timeline, decisions, experts, impact, semantic-search
+│   │   ├── ingest.py         # POST/DELETE /ingest/repo, GET /ingest/status
 │   │   └── health.py         # GET /health
 │   ├── services/
 │   │   ├── agent_builder.py  # Kibana Agent Builder API client
@@ -195,10 +198,13 @@ codelore/
 │       ├── components/
 │       │   ├── ask/AskMode.tsx        # Chat Q&A interface
 │       │   ├── onboard/OnboardMode.tsx # Guided learning paths
-│       │   ├── explore/ExploreMode.tsx # Timeline + decisions
-│       │   ├── explore/Timeline.tsx    # Chronological event view
-│       │   └── explore/DecisionGraph.tsx # Decision card grid
-│       ├── hooks/             # useChat, useTimeline, useDecisions
+│       │   ├── explore/ExploreMode.tsx     # 5-tab explore interface
+│       │   ├── explore/Timeline.tsx        # Chronological event view
+│       │   ├── explore/DecisionGraph.tsx   # Decision card grid
+│       │   ├── explore/SemanticResults.tsx # kNN search results
+│       │   ├── explore/ExpertPanel.tsx     # Expert finder + on-call
+│       │   └── explore/ImpactPanel.tsx     # Risk + co-change analysis
+│       ├── hooks/             # useChat, useTimeline, useExperts, useImpact, useSemanticSearch
 │       └── lib/               # API client, types
 ├── .env.example
 └── README.md
@@ -211,18 +217,31 @@ codelore/
 ### Problem Solved
 New developers waste weeks understanding why code exists. Critical design context is trapped in closed PRs, old Slack threads, and stale docs. CodeLore turns a codebase's scattered history into searchable, AI-powered institutional memory.
 
+### Elasticsearch Features Used
+- **kNN vector search** with `int8_hnsw` quantization — 4x memory savings, fast semantic search across all indices
+- **Multi-index kNN queries** — single query across 4 indices instead of sequential per-index queries
+- **msearch API** — batch multiple queries into one round-trip for timeline construction
+- **Aggregations** — `terms`, `cardinality`, `date_histogram`, `max`/`min` for expert finder, impact analysis, and bus factor
+- **delete_by_query** — clean repo data isolation, no stale cross-repo results
+- **Force merge** — post-ingestion optimization to 1 segment for maximum search performance
+- **`_source` excludes** — embedding vectors excluded at mapping level to reduce network overhead
+
 ### Agent Builder Features Used
 - 6 custom ES|QL tools with parameterized `match()` queries for full-text search
 - Platform tools (`search`, `generate_esql`, `execute_esql`) for dynamic queries
 - Multi-turn conversations with `conversation_id` for stateful onboarding
 - Detailed system instructions defining 3 operating modes and a reasoning framework
+- Repo-scoped queries via `[REPO: owner/name]` prefix in agent messages
 
 ### Challenges
 - **ES|QL syntax**: Discovering that `LIKE CONCAT("%", ?param, "%")` doesn't work in serverless mode and that `match()` is the correct full-text search function for parameterized ESQL tools.
 - **Response parsing**: The Agent Builder API nests the answer under `response.message` rather than at the top level, requiring careful response exploration.
 - **Token limits**: Multi-turn onboarding conversations can exceed the LLM's context window by turn 3, solved with a graceful fallback to fresh conversations.
+- **Cross-repo data leakage**: In-memory auth state lost on server restart caused wrong-repo results. Solved by passing `selected_repo` from frontend with every API call.
+- **Query performance**: Sequential per-index kNN queries took minutes. Solved with multi-index queries, msearch batching, int8_hnsw quantization, and force merge.
 
 ### What We Liked
 - The **ES|QL tool type** made it trivial to create parameterized search tools without custom code.
 - **Platform tools** like `generate_esql` let the agent write dynamic queries on the fly for questions our pre-built tools don't cover.
 - The **conversation API** handles multi-turn context automatically, making stateful onboarding straightforward.
+- **kNN + filter** gives us both semantic understanding and strict repo isolation in a single query.
