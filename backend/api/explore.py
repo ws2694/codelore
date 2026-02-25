@@ -1,12 +1,27 @@
 """Explore API — timeline, decision, semantic, expert, and impact queries."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
+from backend.config import settings
+from backend.services.auth_store import get_auth_state
 from backend.services.elasticsearch_client import get_es_client
 from backend.services.embedding_service import embed_text
 from backend.models.schemas import SemanticSearchRequest, TimelineEntry
 
 router = APIRouter(prefix="/explore", tags=["explore"])
+
+
+def _current_repo() -> str:
+    """Return the currently selected repo or raise 400."""
+    repo = get_auth_state().selected_repo or settings.github_repo
+    if not repo:
+        raise HTTPException(status_code=400, detail="No repo selected. Connect a GitHub repo first.")
+    return repo
+
+
+def _repo_filter() -> dict:
+    """Return an ES term filter for the current repo."""
+    return {"term": {"repo": _current_repo()}}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -124,16 +139,20 @@ async def get_file_timeline(filepath: str):
     es = get_es_client()
     entries = []
 
+    repo_filter = _repo_filter()
+
     # Search commits that touched this file
     commits_result = es.search(
         index="codelore-commits",
         body={
             "query": {
                 "bool": {
+                    "filter": [repo_filter],
                     "should": [
                         {"wildcard": {"files_changed": f"*{filepath}*"}},
                         {"match": {"files_changed": filepath}},
-                    ]
+                    ],
+                    "minimum_should_match": 1,
                 }
             },
             "sort": [{"date": {"order": "desc"}}],
@@ -160,11 +179,13 @@ async def get_file_timeline(filepath: str):
         body={
             "query": {
                 "bool": {
+                    "filter": [repo_filter],
                     "should": [
                         {"wildcard": {"files_changed": f"*{filepath}*"}},
                         {"match": {"body": filepath}},
                         {"match": {"comment_body": filepath}},
-                    ]
+                    ],
+                    "minimum_should_match": 1,
                 }
             },
             "sort": [{"created_at": {"order": "desc"}}],
@@ -190,10 +211,12 @@ async def get_file_timeline(filepath: str):
         body={
             "query": {
                 "bool": {
+                    "filter": [repo_filter],
                     "should": [
                         {"wildcard": {"affected_files": f"*{filepath}*"}},
                         {"match": {"affected_files": filepath}},
-                    ]
+                    ],
+                    "minimum_should_match": 1,
                 }
             },
             "sort": [{"decided_at": {"order": "desc"}}],
@@ -225,13 +248,21 @@ async def get_decisions(
 ):
     """Get synthesized decisions, optionally filtered by query."""
     es = get_es_client()
+    repo_filter = _repo_filter()
 
     if query:
         body = {
             "query": {
-                "multi_match": {
-                    "query": query,
-                    "fields": ["title^3", "summary^2", "rationale", "tags"],
+                "bool": {
+                    "filter": [repo_filter],
+                    "must": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": ["title^3", "summary^2", "rationale", "tags"],
+                            }
+                        }
+                    ],
                 }
             },
             "sort": [{"importance": {"order": "desc"}}],
@@ -239,7 +270,7 @@ async def get_decisions(
         }
     else:
         body = {
-            "query": {"match_all": {}},
+            "query": {"bool": {"filter": [repo_filter]}},
             "sort": [{"importance": {"order": "desc"}}],
             "size": limit,
         }
@@ -259,6 +290,7 @@ async def semantic_search(req: SemanticSearchRequest):
     """Search across all indices using kNN vector similarity."""
     es = get_es_client()
     query_vector = embed_text(req.query)
+    repo_filter = _repo_filter()
 
     target_indices = req.indices or [
         "codelore-commits",
@@ -278,6 +310,7 @@ async def semantic_search(req: SemanticSearchRequest):
                         "query_vector": query_vector,
                         "k": min(req.limit, 10),
                         "num_candidates": 100,
+                        "filter": repo_filter,
                     },
                     "size": min(req.limit, 10),
                     "_source": {"excludes": ["embedding"]},
@@ -310,7 +343,10 @@ async def get_module_experts(module: str, limit: int = 5):
         index="codelore-commits",
         body={
             "query": {
-                "wildcard": {"files_changed": f"*{module}*"}
+                "bool": {
+                    "filter": [_repo_filter()],
+                    "must": [{"wildcard": {"files_changed": f"*{module}*"}}],
+                }
             },
             "aggs": {
                 "top_authors": {
@@ -364,10 +400,12 @@ async def get_file_impact(filepath: str, limit: int = 10):
         body={
             "query": {
                 "bool": {
+                    "filter": [_repo_filter()],
                     "should": [
                         {"wildcard": {"files_changed": f"*{filepath}*"}},
                         {"term": {"files_changed": filepath}},
-                    ]
+                    ],
+                    "minimum_should_match": 1,
                 }
             },
             "aggs": {
@@ -464,7 +502,7 @@ async def get_popular_files(limit: int = Query(default=8, le=30)):
     result = es.search(
         index="codelore-commits",
         body={
-            "query": {"match_all": {}},
+            "query": {"bool": {"filter": [_repo_filter()]}},
             "aggs": {
                 "top_files": {
                     "terms": {"field": "files_changed", "size": limit * 3},
