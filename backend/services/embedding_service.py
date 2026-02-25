@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from sentence_transformers import SentenceTransformer
 
 _model: SentenceTransformer | None = None
@@ -10,7 +12,9 @@ def get_model() -> SentenceTransformer:
     return _model
 
 
+@lru_cache(maxsize=256)
 def embed_text(text: str) -> list[float]:
+    """Embed text with LRU cache — same query string reuses the cached vector."""
     return get_model().encode(text).tolist()
 
 

@@ -8,6 +8,7 @@ from backend.config import get_settings
 from backend.services.github_ingester import GitHubIngester, delete_repo_data
 from backend.services.auth_store import get_auth_state, is_authenticated
 from backend.scripts.setup_indices import optimize_indices
+from backend.services import cache
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ async def trigger_ingestion(
             ingester = GitHubIngester(token=token, repo=target_repo)
             stats = await ingester.ingest_all()
             _ingest_status["last_stats"] = stats
+            # Invalidate explore cache — data has changed
+            cache.invalidate_all()
             # Post-ingestion: force merge to 1 segment for faster kNN + search
             try:
                 optimize_indices()
@@ -81,6 +84,7 @@ async def delete_repo(repo: str):
     if not repo:
         raise HTTPException(status_code=400, detail="repo parameter is required")
     deleted = delete_repo_data(repo)
+    cache.invalidate_all()
     total = sum(deleted.values())
     return {
         "status": "deleted",

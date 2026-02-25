@@ -1,5 +1,6 @@
 """Explore API — timeline, decision, semantic, expert, and impact queries."""
 
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
@@ -8,6 +9,7 @@ from backend.config import get_settings
 from backend.services.auth_store import get_auth_state
 from backend.services.elasticsearch_client import get_es_client
 from backend.services.embedding_service import embed_text
+from backend.services import cache
 from backend.models.schemas import SemanticSearchRequest, TimelineEntry
 
 logger = logging.getLogger(__name__)
@@ -142,8 +144,13 @@ async def get_file_timeline(
     repo: str = Query(default=None, description="Override repo for filtering"),
 ):
     """Get chronological history of a file across commits and PR events."""
-    es = get_es_client()
     current_repo = _resolve_repo(repo)
+    cache_key = f"timeline:{current_repo}:{filepath}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    es = get_es_client()
     rf = _repo_filter(current_repo)
     logger.info("Timeline query: filepath=%s repo=%s", filepath, current_repo)
 
@@ -242,7 +249,9 @@ async def get_file_timeline(
         })
 
     entries.sort(key=lambda e: e.get("date", ""), reverse=True)
-    return {"filepath": filepath, "entries": entries, "total": len(entries)}
+    result = {"filepath": filepath, "entries": entries, "total": len(entries)}
+    cache.put(cache_key, result)
+    return result
 
 
 @router.get("/decisions")
@@ -252,8 +261,13 @@ async def get_decisions(
     repo: str = Query(default=None, description="Override repo for filtering"),
 ):
     """Get synthesized decisions, optionally filtered by query."""
-    es = get_es_client()
     current_repo = _resolve_repo(repo)
+    cache_key = f"decisions:{current_repo}:{query}:{limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    es = get_es_client()
     rf = _repo_filter(current_repo)
 
     if query:
@@ -287,15 +301,23 @@ async def get_decisions(
     for hit in result["hits"]["hits"]:
         decisions.append(hit["_source"])
 
-    return {"decisions": decisions, "total": result["hits"]["total"]["value"]}
+    response = {"decisions": decisions, "total": result["hits"]["total"]["value"]}
+    cache.put(cache_key, response)
+    return response
 
 
 @router.post("/semantic-search")
 async def semantic_search(req: SemanticSearchRequest):
     """Search across all indices using kNN vector similarity."""
+    current_repo = _resolve_repo(req.repo)
+    indices_key = ",".join(sorted(req.indices)) if req.indices else "all"
+    cache_key = f"semantic:{current_repo}:{req.query}:{indices_key}:{req.limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     es = get_es_client()
     query_vector = embed_text(req.query)
-    current_repo = _resolve_repo(req.repo)
     rf = _repo_filter(current_repo)
     logger.info("Semantic search: query=%r repo=%s", req.query[:50], current_repo)
 
@@ -345,7 +367,9 @@ async def semantic_search(req: SemanticSearchRequest):
             "metadata": src,
         })
 
-    return {"query": req.query, "results": results}
+    response = {"query": req.query, "results": results}
+    cache.put(cache_key, response)
+    return response
 
 
 @router.get("/experts/{module}")
@@ -355,8 +379,13 @@ async def get_module_experts(
     repo: str = Query(default=None, description="Override repo for filtering"),
 ):
     """Find the top contributors for a given module/file path."""
-    es = get_es_client()
     current_repo = _resolve_repo(repo)
+    cache_key = f"experts:{current_repo}:{module}:{limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    es = get_es_client()
     rf = _repo_filter(current_repo)
 
     result = es.search(
@@ -402,13 +431,15 @@ async def get_module_experts(
 
     on_call = _pick_on_call(experts) if experts else None
 
-    return {
+    response = {
         "module": module,
         "experts": experts,
         "on_call": on_call,
         "bus_factor": aggs["unique_authors"]["value"],
         "total_commits": aggs["total_commits"]["value"],
     }
+    cache.put(cache_key, response)
+    return response
 
 
 @router.get("/impact/{filepath:path}")
@@ -418,8 +449,13 @@ async def get_file_impact(
     repo: str = Query(default=None, description="Override repo for filtering"),
 ):
     """Analyze change impact, co-change patterns, and risk for a file."""
-    es = get_es_client()
     current_repo = _resolve_repo(repo)
+    cache_key = f"impact:{current_repo}:{filepath}:{limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    es = get_es_client()
     rf = _repo_filter(current_repo)
 
     result = es.search(
@@ -507,7 +543,7 @@ async def get_file_impact(
         co_change_count=len(co_changes),
     )
 
-    return {
+    response = {
         "filepath": filepath,
         "total_commits": total_commits,
         "bus_factor": bus_factor,
@@ -518,6 +554,8 @@ async def get_file_impact(
         "experts": experts,
         "on_call": on_call,
     }
+    cache.put(cache_key, response)
+    return response
 
 
 @router.get("/popular-files")
@@ -526,8 +564,13 @@ async def get_popular_files(
     repo: str = Query(default=None, description="Override repo for filtering"),
 ):
     """Get the most frequently changed files across all commits."""
-    es = get_es_client()
     current_repo = _resolve_repo(repo)
+    cache_key = f"popular:{current_repo}:{limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    es = get_es_client()
     rf = _repo_filter(current_repo)
 
     result = es.search(
@@ -558,4 +601,6 @@ async def get_popular_files(
         if len(files) >= limit:
             break
 
-    return {"files": files}
+    response = {"files": files}
+    cache.put(cache_key, response)
+    return response
