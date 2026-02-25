@@ -1,6 +1,7 @@
 """GitHub data ingester — fetches commits, PRs, docs and indexes into Elasticsearch."""
 
 import hashlib
+import logging
 from datetime import datetime
 
 import httpx
@@ -9,6 +10,8 @@ from elasticsearch.helpers import bulk
 from backend.config import get_settings
 from backend.services.elasticsearch_client import get_es_client
 from backend.services.embedding_service import embed_text, embed_batch
+
+logger = logging.getLogger(__name__)
 
 
 ALL_INDICES = [
@@ -21,17 +24,29 @@ ALL_INDICES = [
 
 
 def delete_repo_data(repo: str) -> dict[str, int]:
-    """Delete all documents for a given repo across all indices."""
+    """Delete all documents for a given repo across all indices.
+
+    Uses bool/should to handle both explicit keyword mapping (term on 'repo')
+    and dynamic text mapping (term on 'repo.keyword') — whichever exists.
+    """
     es = get_es_client()
     deleted = {}
+    query = {
+        "query": {
+            "bool": {
+                "should": [
+                    {"term": {"repo": repo}},
+                    {"term": {"repo.keyword": repo}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+    }
     for index in ALL_INDICES:
         if not es.indices.exists(index=index):
+            deleted[index] = 0
             continue
-        resp = es.delete_by_query(
-            index=index,
-            body={"query": {"term": {"repo": repo}}},
-            refresh=True,
-        )
+        resp = es.delete_by_query(index=index, body=query, refresh=True)
         deleted[index] = resp.get("deleted", 0)
     return deleted
 
@@ -60,8 +75,8 @@ class GitHubIngester:
         # Delete existing data for this repo to avoid stale/duplicate documents
         deleted = delete_repo_data(self.repo)
         total_deleted = sum(deleted.values())
-        if total_deleted:
-            print(f"Cleaned {total_deleted} old documents for {self.repo}")
+        logger.info("Cleanup for %s: deleted %d docs %s", self.repo, total_deleted, deleted)
+        print(f"Cleanup for {self.repo}: deleted {total_deleted} docs — {deleted}")
 
         async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
             self.client = client
@@ -345,6 +360,8 @@ class GitHubIngester:
         """Synthesize architectural decisions from merged PRs and high-impact commits."""
         print(f"Synthesizing decisions from {self.repo}...")
         actions = []
+        # Track merge commit SHAs so the commit pass skips them (avoid duplicates)
+        pr_merge_shas: set[str] = set()
 
         # --- From merged PRs ---
         page = 1
@@ -363,6 +380,11 @@ class GitHubIngester:
             for pr in prs:
                 if not pr.get("merged_at"):
                     continue
+
+                # Track the merge commit SHA to skip it in the commit pass
+                merge_sha = pr.get("merge_commit_sha", "")
+                if merge_sha:
+                    pr_merge_shas.add(merge_sha)
 
                 body = pr.get("body", "") or ""
                 title = pr.get("title", "")
@@ -430,9 +452,7 @@ class GitHubIngester:
 
         pr_count = len(actions)
 
-        # --- From high-impact commits ---
-        # Commits that touch 3+ files or have multi-line messages represent decisions
-        pr_shas = set()  # track PR-linked commits to avoid duplicates
+        # --- From high-impact commits (skip those already covered by PR decisions) ---
         page = 1
         while page <= 5:
             resp = await self.client.get(
@@ -448,6 +468,11 @@ class GitHubIngester:
 
             for commit in commits:
                 sha = commit.get("sha", "")
+
+                # Skip commits already covered by a PR-based decision
+                if sha in pr_merge_shas:
+                    continue
+
                 commit_data = commit.get("commit", {})
                 message = commit_data.get("message", "")
 
@@ -471,10 +496,10 @@ class GitHubIngester:
                 total_changes = stats.get("total", 0)
                 affected_files = [f["filename"] for f in files[:20]]
 
-                # Decision criteria: 3+ files changed, OR 50+ lines changed,
-                # OR multi-line commit message (rationale in body)
-                has_body = len(lines) > 1
-                is_significant = len(files) >= 3 or total_changes >= 50 or has_body
+                # Decision criteria: 5+ files changed, OR 100+ lines changed,
+                # OR multi-line commit message with meaningful body (rationale)
+                has_body = len(lines) > 1 and len("\n".join(lines[1:])) >= 30
+                is_significant = len(files) >= 5 or total_changes >= 100 or has_body
 
                 if not is_significant:
                     continue
